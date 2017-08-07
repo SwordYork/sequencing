@@ -40,7 +40,10 @@ or just words. For a toy example, 32K words are
 enough.  For Chinese, we may use Chinese characters as the basic units
 instead of words for simplicity.
 
-Then, we need to build the parallel inputs (English to Chinese) for training.
+We also provide the pre-processed [UN dataset](http://conferences.unite.un.org/UNCorpus/) which
+contains 14590228 parallel sentences. You may download it from [Baidu Yun](https://pan.baidu.com/s/1eSu203S).
+
+After preparing the dataset, we need to build the parallel inputs (English to Chinese) for training.
 ```
 # load vocab
 src_vocab = build_vocab(src_vocab_file, src_embedding_dim, ' ')
@@ -145,7 +148,7 @@ For greedy inference, we only need to set `teacher_rate` to 0 in
 Please check [build_model.py](build_model.py) for the details.
 
 ### Speed
-Training is very fast using the default setting (both the encoder and the decoder are a single layer RNN with 1024 hidden units).
+Training is very fast using the default setting (both the encoder and the decoder are single layer RNNs with 1024 hidden units).
 It could iterate over 30,000,000 sentences in one days (350 sentences per seconds) on a single Titan Xp.
 Inferring is also fast, it only takes 1 minute to translate 2000 English sentences.
 
