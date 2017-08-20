@@ -173,7 +173,7 @@ class AttentionRNNDecoder(Decoder):
         if self.mode == MODE.RL:
             outputs = self.output_tuple(
                 logits=logits,
-                baseline_states=cell_states[-1].c,
+                baseline_states=cell_output,
                 predicted_ids=sample_ids)
         else:
             outputs = self.output_tuple(
