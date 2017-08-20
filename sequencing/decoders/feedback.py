@@ -88,7 +88,7 @@ class TrainingFeedBack(FeedBack):
         :param teacher_rate: float, related to DAD, teacher forcing.
         :param name:
         """
-        super(TrainingFeedBack, self).__init__(vocab=vocab, name=name)
+        super(TrainingFeedBack, self).__init__(vocab, name=name)
 
         # We need to convert first, because we may input numpy array
         inputs = tf.convert_to_tensor(input_ids, name='inputs')
@@ -119,8 +119,7 @@ class TrainingFeedBack(FeedBack):
         return finished, inputs
 
     def sample(self, logits):
-        sample_ids = tf.cast(
-            tf.argmax(logits, axis=-1), dtypes.int32)
+        sample_ids = tf.cast(tf.argmax(logits, axis=-1), dtypes.int32)
         return sample_ids
 
     def next_inputs(self, time, sample_ids=None):
@@ -129,16 +128,56 @@ class TrainingFeedBack(FeedBack):
             next_input_ids = self._input_tas.read(time)
             return finished, self.lookup(next_input_ids)
 
-        teacher_rates = tf.less_equal(tf.random_uniform(tf.shape(sample_ids),
-                                                        minval=0.,
-                                                        maxval=1.),
-                                      self.teacher_rate)
+        # scheduled
+        teacher_rates = tf.less_equal(
+            tf.random_uniform(tf.shape(sample_ids), minval=0., maxval=1.),
+            self.teacher_rate)
         teacher_rates = tf.to_int32(teacher_rates)
 
         next_input_ids = (teacher_rates * self._input_tas.read(time)
                           + (1 - teacher_rates) * sample_ids)
 
         return finished, self.lookup(next_input_ids)
+
+
+class RLTrainingFeedBack(FeedBack):
+    def __init__(self, vocab, batch_size, max_step=300, greedy=False,
+                 name='feedback'):
+        """
+        FeedBack when using RL, i.e. greedy feedback.
+
+        :param batch_size: should be dynamical
+        :param vocab: object, see `data/vocab.py`
+        :param max_step:
+        :param name:
+        """
+        super(RLTrainingFeedBack, self).__init__(vocab, max_step, name=name)
+
+        self.batch_size = batch_size
+        self.greedy = greedy
+        with tf.variable_scope(name):
+            self.lookup = LookUpOp(vocab.vocab_size, vocab.embedding_dim)
+
+    def initialize(self):
+        # finished means EOS is feed.
+        finished = tf.equal(0, self.max_step)
+        finished = tf.tile(finished, [self.batch_size])
+        inputs = self.lookup(tf.tile([self.bos_id], [self.batch_size]))
+
+        return finished, inputs
+
+    def sample(self, logits):
+        if self.greedy:
+            return tf.cast(tf.argmax(logits, axis=-1), dtypes.int32)
+
+        return tf.cast(tf.squeeze(tf.multinomial(logits, 1), axis=[-1])
+                       , dtypes.int32)
+
+    def next_inputs(self, time, sample_ids):
+        finished = math_ops.logical_or(
+            tf.greater_equal(time + 1, self.max_step),
+            tf.equal(self.eos_id, sample_ids))
+        return finished, self.lookup(sample_ids)
 
 
 class BeamFeedBack(FeedBack):
@@ -210,6 +249,7 @@ class BeamFeedBack(FeedBack):
         return sample_ids, beam_ids, next_log_probs
 
     def next_inputs(self, time, sample_ids):
-        finished = math_ops.logical_or((time + 1 >= self.max_step),
-                                       tf.equal(self.eos_id, sample_ids))
+        finished = math_ops.logical_or(
+            tf.greater_equal(time + 1, self.max_step),
+            tf.equal(self.eos_id, sample_ids))
         return finished, self.lookup(sample_ids)
