@@ -7,7 +7,7 @@ key features of this framework are flexibility and simplicity. That is, keep
 
 ### Dependency
 1. Python >= 3.5 (please forget Python 2)
-2. Tensorflow >= 1.2
+2. Tensorflow >= 1.2 (Better to train on GPUs)
 3. numpy >= 1.12
 
 Please run `nosetests tests` to verify whether it is ready.
