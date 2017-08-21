@@ -9,6 +9,7 @@ from collections import namedtuple
 
 import tensorflow as tf
 from tensorflow.contrib.rnn import LSTMStateTuple
+from tensorflow.python.framework import dtypes
 
 from .decoder import Decoder
 from .. import MODE, DTYPE
@@ -45,7 +46,14 @@ class AttentionRNNDecoder(Decoder):
                                          name='logits_trans')
         self.batch_size = self.feedback.batch_size
 
-        if self.mode != MODE.INFER:
+        if self.mode == MODE.INFER:
+            self.state_tuple = namedtuple('beam_decoder_state',
+                                          ['cell_states', 'log_probs',
+                                           'finished'])
+        else:
+            self.state_tuple = namedtuple('decoder_state', ['cell_states'])
+
+        if self.mode == MODE.TRAIN or self.mode == MODE.EVAL:
             self.output_tuple = namedtuple('output',
                                            ['logits', 'predicted_ids'])
             self.output_size = self.output_tuple(logits=self.vocab_size,
@@ -53,7 +61,17 @@ class AttentionRNNDecoder(Decoder):
                                                      []))
             self.output_dtype = self.output_tuple(logits=DTYPE,
                                                   predicted_ids=tf.int32)
-            self.state_tuple = namedtuple('decoder_state', ['cell_states'])
+        elif self.mode == MODE.RL:
+            self.output_tuple = namedtuple('output',
+                                           ['logits', 'baseline_states',
+                                            'predicted_ids'])
+            self.output_size = self.output_tuple(logits=self.vocab_size,
+                                                 baseline_states=self.state_size,
+                                                 predicted_ids=tf.TensorShape(
+                                                     []))
+            self.output_dtype = self.output_tuple(logits=DTYPE,
+                                                  baseline_states=DTYPE,
+                                                  predicted_ids=tf.int32)
         else:
             self.output_tuple = namedtuple('output', ['logits', 'predicted_ids',
                                                       'beam_ids'])
@@ -64,9 +82,7 @@ class AttentionRNNDecoder(Decoder):
             self.output_dtype = self.output_tuple(logits=DTYPE,
                                                   predicted_ids=tf.int32,
                                                   beam_ids=tf.int32)
-            self.state_tuple = namedtuple('beam_decoder_state',
-                                          ['cell_states', 'log_probs',
-                                           'finished'])
+
 
     def _default_params(self):
         return {'rnn_cell': {'cell_name': 'GRUCell',
@@ -154,9 +170,15 @@ class AttentionRNNDecoder(Decoder):
 
         sample_ids = self.feedback.sample(logits=logits)
 
-        outputs = self.output_tuple(
-            logits=logits,
-            predicted_ids=sample_ids)
+        if self.mode == MODE.RL:
+            outputs = self.output_tuple(
+                logits=logits,
+                baseline_states=cell_output,
+                predicted_ids=sample_ids)
+        else:
+            outputs = self.output_tuple(
+                logits=logits,
+                predicted_ids=sample_ids)
 
         finished, next_inputs = self.feedback.next_inputs(time=time,
                                                           sample_ids=sample_ids)
