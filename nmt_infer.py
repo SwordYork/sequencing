@@ -78,16 +78,16 @@ def infer(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
             gathered_pred_ids = numpy.zeros_like(beam_ids_np)
             for idx in range(beam_ids_np.shape[0]):
-                gathered_pred_ids = gathered_pred_ids[:,
-                                    beam_ids_np[idx] % beam_ids_np.shape[1]]
+                gathered_pred_ids = gathered_pred_ids[:, beam_ids_np[idx] %
+                                                         beam_ids_np.shape[1]]
                 gathered_pred_ids[idx, :] = predicted_ids_np[idx]
 
             seq_lens = []
             for idx in range(beam_ids_np.shape[1]):
                 pred_ids_list = gathered_pred_ids[:, idx].tolist()
-                seq_lens.append(pred_ids_list.index(
-                    trg_vocab.eos_id) + 1 if trg_vocab.eos_id in pred_ids_list else len(
-                    pred_ids_list))
+                seq_lens.append(pred_ids_list.index(trg_vocab.eos_id) + 1 \
+                                    if trg_vocab.eos_id in pred_ids_list \
+                                    else len(pred_ids_list))
 
             log_probs_np = log_probs_np / numpy.array(seq_lens)
             log_probs_np_list = numpy.split(log_probs_np, data_batch_size,

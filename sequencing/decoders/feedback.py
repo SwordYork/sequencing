@@ -170,8 +170,8 @@ class RLTrainingFeedBack(FeedBack):
         if self.greedy:
             return tf.cast(tf.argmax(logits, axis=-1), dtypes.int32)
 
-        return tf.cast(tf.squeeze(tf.multinomial(logits, 1), axis=[-1])
-                       , dtypes.int32)
+        return tf.cast(tf.squeeze(tf.multinomial(logits, 1), axis=[-1]),
+                       dtypes.int32)
 
     def next_inputs(self, time, sample_ids):
         finished = math_ops.logical_or(

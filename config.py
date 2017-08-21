@@ -9,6 +9,7 @@ TrainingConfigs = namedtuple('TrainingConfigs',
                               'beam_size', 'batch_size',
                               'max_step', 'model_dir',
                               'lr_rate', 'rl_lr_rate',
+                              'clip_gradient_norm', 'rl_clip_gradient_norm',
                               'train_steps'])
 
 
@@ -53,6 +54,8 @@ def word2pos():
         model_dir='models',
         lr_rate=0.001,
         rl_lr_rate=0.0001,
+        clip_gradient_norm=5.,
+        rl_clip_gradient_norm=1.,
         train_steps=200000)
 
     return configs
@@ -90,6 +93,8 @@ def en2zh():
         model_dir='models',
         lr_rate=0.0005,
         rl_lr_rate=0.0001,
+        clip_gradient_norm=5.,
+        rl_clip_gradient_norm=1.,
         train_steps=200000)
 
     return configs

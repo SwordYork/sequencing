@@ -19,7 +19,8 @@ from sequencing import MODE, TIME_MAJOR
 
 def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
           params, batch_size=1, train_steps=200000, lr_rate=0.0005,
-          check_every_step=500, model_dir='models/', mode=MODE.TRAIN):
+          clip_gradient_norm=5., check_every_step=500, model_dir='models/',
+          mode=MODE.TRAIN):
     # ------------------------------------
     # prepare data
     # ------------------------------------
@@ -67,7 +68,7 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
     # optimizer
     optimizer = tf.train.AdamOptimizer(lr_rate)
     gradients, variables = zip(*optimizer.compute_gradients(total_loss_avg))
-    gradients, _ = tf.clip_by_global_norm(gradients, 5.0)
+    gradients, _ = tf.clip_by_global_norm(gradients, clip_gradient_norm)
     train_op = optimizer.apply_gradients(zip(gradients, variables))
 
     # Create a saver object which will save all the variables
@@ -145,12 +146,14 @@ if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
     configs = get_config('word2pos')
     lr_rate = configs.lr_rate
+    clip_gradient_norm = configs.clip_gradient_norm
     if len(sys.argv) > 1:
         if sys.argv[1] == 'train':
             mode = MODE.TRAIN
         elif sys.argv[1] == 'rl':
             mode = MODE.RL
             lr_rate = configs.rl_lr_rate
+            clip_gradient_norm = configs.rl_clip_gradient_norm
         else:
             raise Exception('Not supported')
     else:
@@ -162,5 +165,6 @@ if __name__ == '__main__':
           batch_size=configs.batch_size,
           train_steps=configs.train_steps,
           lr_rate=lr_rate,
+          clip_gradient_norm=clip_gradient_norm,
           model_dir=configs.model_dir,
           mode=mode)
