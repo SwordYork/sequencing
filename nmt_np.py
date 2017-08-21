@@ -5,9 +5,12 @@
 #   GitHub: https://github.com/SwordYork/sequencing
 #   No rights reserved.
 #
-import sequencing_np as sqn
-from sequencing_np import MODE, np, DTYPE, TIME_MAJOR
 import sys
+
+import sequencing_np as sqn
+from config import get_config
+from sequencing_np import MODE, np, DTYPE, TIME_MAJOR
+
 
 def build_vocab(vocab_file, embedding_dim, delimiter=' '):
     # construct vocab
@@ -97,16 +100,11 @@ def build_attention_model_np(params, dict_var_vals, src_vocab, trg_vocab,
     return decoder_output, decoder_final_state
 
 
-def infer(src_vocab_file, src_embedding_dim,
-          trg_vocab_file, trg_embedding_dim,
-          src_sentence, params, beam_size=1, model_dir='models/'):
+def infer(src_vocab, trg_vocab, src_sentence, params, beam_size=1,
+          model_dir='models/'):
     # ------------------------------------
     # prepare data
     # ------------------------------------
-
-    # load vocab
-    src_vocab = build_vocab(src_vocab_file, src_embedding_dim, ' ')
-    trg_vocab = build_vocab(trg_vocab_file, trg_embedding_dim, '')
 
     # load parallel data
     source_ids = np.asarray([src_vocab.string_to_ids(src_sentence)],
@@ -152,23 +150,10 @@ def infer(src_vocab_file, src_embedding_dim,
 
 
 if __name__ == '__main__':
-    params = {'encoder': {'rnn_cell': {'state_size': 1024,
-                                       'cell_name': 'BasicLSTMCell',
-                                       'num_layers': 1,
-                                       'input_keep_prob': 1.0,
-                                       'output_keep_prob': 1.0},
-                          'attention_key_size': 512},
-              'decoder': {'rnn_cell': {'cell_name': 'BasicLSTMCell',
-                                       'state_size': 1024,
-                                       'num_layers': 1,
-                                       'input_keep_prob': 1.0,
-                                       'output_keep_prob': 1.0},
-                          'logits': {'input_keep_prob': 1.0}}}
+    configs = get_config('word2pos')
 
     sentence = sys.argv[1]
     print('Translating: {}'.format(sentence))
-    infer('data_en2zh/vocab.en', 512,
-          'data_en2zh/vocab.zh', 512,
-          sentence,
-          params, beam_size=5,
+    infer(configs.src_vocab, configs.trg_vocab,
+          sentence, configs.params, beam_size=5,
           model_dir='models/')

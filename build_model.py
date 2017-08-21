@@ -8,8 +8,9 @@
 import json
 
 import numpy
-import sequencing as sq
 import tensorflow as tf
+
+import sequencing as sq
 from sequencing import TIME_MAJOR, MODE
 from sequencing.utils.metrics import Delta_BLEU
 
@@ -57,9 +58,9 @@ def cross_entropy_sequence_loss(logits, targets, sequence_length):
         losses = entropy_losses * loss_mask
         # losses.shape: T * B
         # sequence_length: B
-        loss_avg = tf.reduce_sum(losses) / total_length
+        total_loss_avg = tf.reduce_sum(losses) / total_length
 
-        return loss_avg
+        return total_loss_avg
 
 
 def rl_sequence_loss(logits, targets, sequence_length, baseline_states, reward):
@@ -84,47 +85,44 @@ def rl_sequence_loss(logits, targets, sequence_length, baseline_states, reward):
         reward_loss_rmse = tf.sqrt(tf.reduce_sum(reward_losses * loss_mask) /
                                    total_length)
 
-        #        reward = tf.Print(reward, [reward], 'reward')
-        #        reward_predicted = tf.Print(reward_predicted, [reward_predicted],
-        #                                    'reward_predicted')
-
         reward_entropy_losses = (reward - tf.stop_gradient(reward_predicted)) \
                                 * entropy_losses * loss_mask
 
-        # reward_entropy_losses = reward * entropy_losses
-        # losses = (reward_entropy_losses) * tf.transpose(tf.to_float(
-        #     loss_mask), [1, 0])
-
         # Calculate the average log perplexity in each batch
-        loss_avg = tf.reduce_sum(
+        total_loss_avg = tf.reduce_sum(
             reward_entropy_losses) / total_length + reward_loss_rmse
 
         # the first reward predict is total reward
-        return loss_avg, tf.reduce_mean(tf.slice(reward_predicted, [0, 0],
-                                                 [1, -1]))
+        return total_loss_avg, \
+               tf.reduce_sum(entropy_losses * loss_mask) / total_length, \
+               tf.reduce_mean(tf.slice(reward_predicted, [0, 0], [1, -1]))
 
 
 def _py_func(predict_target_ids, ground_truth_ids, eos_id):
-    n = 4 # 4-gram
-    delta = True # delta future reward
+    n = 4  # 4-gram
+    delta = True  # delta future reward
     batch_size = predict_target_ids.shape[1]
     length = numpy.zeros(batch_size, dtype=numpy.int32)
     reward = numpy.zeros_like(predict_target_ids, dtype=numpy.float32)
 
     for i in range(batch_size):
         p_id = predict_target_ids[:, i].tolist()
-        p_len = p_id.index(eos_id) if eos_id in p_id else (len(p_id) - 1)
-        length[i] = p_len + 1
+        p_len = p_id.index(eos_id) + 1 if eos_id in p_id else len(p_id)
+        length[i] = p_len
+        p_id = p_id[:p_len]
 
         t_id = ground_truth_ids[:, i].tolist()
+        t_len = t_id.index(eos_id) + 1 if eos_id in t_id else len(t_id)
+        t_id = t_id[:t_len]
+
         bleu_scores = Delta_BLEU(p_id, t_id, n)
-        reward_i = bleu_scores[:, n-1].copy()
+        reward_i = bleu_scores[:, n - 1].copy()
 
         if delta:
             reward_i[1:] = reward_i[1:] - reward_i[:-1]
-            reward[:, i] = reward_i[::-1].cumsum()[::-1]
+            reward[:p_len, i] = reward_i[::-1].cumsum()[::-1]
         else:
-            reward[:, i] = reward_i[-1]
+            reward[:p_len, i] = reward_i[-1]
 
     return reward, length
 
@@ -271,17 +269,17 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
             Tout=[tf.float32, tf.int32],
             name='reward')
         sequence_length.set_shape((None,))
-        loss_avg, reward_predicted = rl_sequence_loss(
+        total_loss_avg, entropy_loss_avg, reward_predicted = rl_sequence_loss(
             logits=decoder_output.logits,
             targets=predict_ids,
             sequence_length=sequence_length,
             baseline_states=baseline_states,
             reward=reward)
-        return decoder_output, loss_avg, reward_predicted
+        return decoder_output, total_loss_avg, entropy_loss_avg, reward_predicted
     else:
 
-        loss_avg = cross_entropy_sequence_loss(
+        total_loss_avg = cross_entropy_sequence_loss(
             logits=decoder_output.logits,
             targets=ground_truth_ids,
             sequence_length=target_seq_length)
-        return decoder_output, loss_avg, tf.to_float(0.)
+        return decoder_output, total_loss_avg, total_loss_avg, tf.to_float(0.)

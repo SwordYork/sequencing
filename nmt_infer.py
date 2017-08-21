@@ -7,14 +7,16 @@
 #
 import numpy
 import tensorflow as tf
-from build_inputs import build_vocab, build_parallel_inputs
+
+from build_inputs import build_parallel_inputs
 from build_model import build_attention_model, optimistic_restore
+from config import get_config
 from sequencing import MODE
 
 
 def infer(src_vocab, src_data_file, trg_vocab, trg_data_file,
-          params, output_file, beam_size=1, batch_size=1,
-          model_dir='models/'):
+          params, beam_size=1, batch_size=1, max_step=100,
+          output_file='test.out', model_dir='models/'):
     # ------------------------------------
     # prepare data
     # trg_data_file may be empty.
@@ -46,7 +48,7 @@ def infer(src_vocab, src_data_file, trg_vocab, trg_data_file,
         build_attention_model(params, src_vocab, trg_vocab, source_ids,
                               source_seq_length, target_ids, target_seq_length,
                               beam_size=beam_size, mode=MODE.INFER,
-                              max_step=100)
+                              max_step=max_step)
 
     # GPU config
     config = tf.ConfigProto()
@@ -105,23 +107,12 @@ def infer(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
-    params = {'encoder': {'rnn_cell': {'state_size': 512,
-                                       'cell_name': 'BasicLSTMCell',
-                                       'num_layers': 1,
-                                       'input_keep_prob': 1.0,
-                                       'output_keep_prob': 1.0},
-                          'attention_key_size': 256},
-              'decoder': {'rnn_cell': {'cell_name': 'BasicLSTMCell',
-                                       'state_size': 512,
-                                       'num_layers': 1,
-                                       'input_keep_prob': 1.0,
-                                       'output_keep_prob': 1.0},
-                          'logits': {'input_keep_prob': 1.0}}}
+    configs = get_config('word2pos')
 
-    # load vocab
-    src_vocab = build_vocab('data/vocab.word', 256, ' ')
-    trg_vocab = build_vocab('data/vocab.tag', 32, ' ')
-
-    infer(src_vocab, 'data/test.word', trg_vocab, 'data/test.tag',
-          params, 'test.out', beam_size=1, batch_size=64,
-          model_dir='models')
+    infer(configs.src_vocab, configs.test_src_file,
+          configs.trg_vocab, configs.test_trg_file,
+          configs.params,
+          beam_size=configs.beam_size,
+          batch_size=configs.batch_size,
+          max_step=configs.max_step,
+          model_dir=configs.model_dir)
