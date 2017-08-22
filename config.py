@@ -10,7 +10,7 @@ TrainingConfigs = namedtuple('TrainingConfigs',
                               'max_step', 'model_dir',
                               'lr_rate', 'rl_lr_rate',
                               'clip_gradient_norm', 'rl_clip_gradient_norm',
-                              'train_steps'])
+                              'pretrain_baseline_steps', 'train_steps'])
 
 
 def get_config(config_name):
@@ -55,7 +55,8 @@ def word2pos():
         lr_rate=0.001,
         rl_lr_rate=0.0001,
         clip_gradient_norm=5.,
-        rl_clip_gradient_norm=1.,
+        rl_clip_gradient_norm=5.,
+        pretrain_baseline_steps=1000,
         train_steps=200000)
 
     return configs
@@ -95,6 +96,7 @@ def en2zh():
         rl_lr_rate=0.0001,
         clip_gradient_norm=5.,
         rl_clip_gradient_norm=1.,
+        pretrain_baseline_steps=1000,
         train_steps=200000)
 
     return configs

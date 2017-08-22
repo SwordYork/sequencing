@@ -77,7 +77,8 @@ def rl_sequence_loss(logits, targets, sequence_length, baseline_states, reward):
         loss_mask = tf.transpose(tf.to_float(loss_mask), [1, 0])
 
         reward_predicted = tf.contrib.layers.fully_connected(baseline_states, 1,
-                                                             activation_fn=None)
+                                                             activation_fn=None,
+                                                             scope='baseline')
         reward_predicted = tf.squeeze(reward_predicted)
 
         reward_losses = tf.pow(reward_predicted - reward, 2)

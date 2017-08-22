@@ -20,7 +20,7 @@ from sequencing import MODE, TIME_MAJOR
 def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
           params, batch_size=1, train_steps=200000, lr_rate=0.0005,
           clip_gradient_norm=5., check_every_step=500, model_dir='models/',
-          mode=MODE.TRAIN):
+          pretrain_baseline_steps=500, mode=MODE.TRAIN):
     # ------------------------------------
     # prepare data
     # ------------------------------------
@@ -60,16 +60,31 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                                   source_seq_length, target_ids,
                                   target_seq_length, mode=MODE.EVAL)
 
+
+    # optimizer
+    optimizer = tf.train.AdamOptimizer(lr_rate)
+    baseline_train_op = None
+
+    if mode == MODE.RL:
+        baseline_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
+                                          'baseline')
+        baseline_train_op = optimizer.minimize(total_loss_avg,
+                                            var_list=baseline_vars)
+
+    gradients, variables = zip(*optimizer.compute_gradients(total_loss_avg))
+    gradients_norm = tf.global_norm(gradients)
+
+
+    gradients, _ = tf.clip_by_global_norm(gradients, clip_gradient_norm,
+                                          use_norm=gradients_norm)
+    train_op = optimizer.apply_gradients(zip(gradients, variables))
+
     # record loss curve
     tf.summary.scalar('total_loss', total_loss_avg)
     tf.summary.scalar('entropy_loss_avg', entropy_loss_avg)
     tf.summary.scalar('reward_predicted', reward_predicted)
+    tf.summary.scalar('gradients_norm', gradients_norm)
 
-    # optimizer
-    optimizer = tf.train.AdamOptimizer(lr_rate)
-    gradients, variables = zip(*optimizer.compute_gradients(total_loss_avg))
-    gradients, _ = tf.clip_by_global_norm(gradients, clip_gradient_norm)
-    train_op = optimizer.apply_gradients(zip(gradients, variables))
 
     # Create a saver object which will save all the variables
     saver = tf.train.Saver(max_to_keep=3)
@@ -97,6 +112,22 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
         if last_ckpt:
             global_step = int(last_ckpt.split('-')[-1])
             optimistic_restore(sess, last_ckpt)
+
+        if mode == MODE.RL:
+            tf.logging.info('Pretrain baseline ...')
+            for step in range(pretrain_baseline_steps):
+                src_np, src_len_np, trg_np, trg_len_np = next(
+                    parallel_data_generator)
+                _, total_loss_avg_np, summary, reward_predicted_np = \
+                    sess.run([baseline_train_op, total_loss_avg, summary_merged,
+                              reward_predicted],
+                             feed_dict={source_ids: src_np,
+                                        source_seq_length: src_len_np,
+                                        target_ids: trg_np,
+                                        target_seq_length: trg_len_np})
+                train_writer.add_summary(summary, global_step)
+
+        tf.logging.info('Train model ...')
 
         # start training
         start_time = time.time()
@@ -167,4 +198,5 @@ if __name__ == '__main__':
           lr_rate=lr_rate,
           clip_gradient_norm=clip_gradient_norm,
           model_dir=configs.model_dir,
+          pretrain_baseline_steps=configs.pretrain_baseline_steps,
           mode=mode)
