@@ -76,9 +76,14 @@ def rl_sequence_loss(logits, targets, sequence_length, baseline_states, reward):
             tf.to_int32(sequence_length), tf.to_int32(tf.shape(targets)[0]))
         loss_mask = tf.transpose(tf.to_float(loss_mask), [1, 0])
 
-        reward_predicted = tf.contrib.layers.fully_connected(baseline_states, 1,
-                                                             activation_fn=None,
-                                                             scope='baseline')
+        with tf.variable_scope('baseline'):
+            reward_predicted_m = tf.contrib.layers.fully_connected(
+                baseline_states, baseline_states.get_shape().as_list()[-1],
+                activation_fn=tf.nn.relu, scope='middle')
+            # note, there is no negative reward, so we could use relu
+            reward_predicted = tf.contrib.layers.fully_connected(
+                reward_predicted_m, 1, activation_fn=None)
+
         reward_predicted = tf.squeeze(reward_predicted)
 
         reward_losses = tf.pow(reward_predicted - reward, 2)
@@ -96,6 +101,7 @@ def rl_sequence_loss(logits, targets, sequence_length, baseline_states, reward):
         # the first reward predict is total reward
         return total_loss_avg, \
                tf.reduce_sum(entropy_losses * loss_mask) / total_length, \
+               reward_loss_rmse, \
                tf.reduce_mean(tf.slice(reward_predicted, [0, 0], [1, -1]))
 
 
@@ -270,17 +276,19 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
             Tout=[tf.float32, tf.int32],
             name='reward')
         sequence_length.set_shape((None,))
-        total_loss_avg, entropy_loss_avg, reward_predicted = rl_sequence_loss(
+        total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted \
+            = rl_sequence_loss(
             logits=decoder_output.logits,
             targets=predict_ids,
             sequence_length=sequence_length,
             baseline_states=baseline_states,
             reward=reward)
-        return decoder_output, total_loss_avg, entropy_loss_avg, reward_predicted
+        return decoder_output, total_loss_avg, entropy_loss_avg, \
+               reward_loss_rmse, reward_predicted
     else:
-
         total_loss_avg = cross_entropy_sequence_loss(
             logits=decoder_output.logits,
             targets=ground_truth_ids,
             sequence_length=target_seq_length)
-        return decoder_output, total_loss_avg, total_loss_avg, tf.to_float(0.)
+        return decoder_output, total_loss_avg, total_loss_avg, \
+               tf.to_float(0.), tf.to_float(0.)

@@ -5,15 +5,15 @@
 #   GitHub: https://github.com/SwordYork/sequencing
 #   No rights reserved.
 #
+import argparse
 import os
-import sys
 import time
 
 import tensorflow as tf
 
+import config
 from build_inputs import build_parallel_inputs
 from build_model import build_attention_model, optimistic_restore
-from config import get_config
 from sequencing import MODE, TIME_MAJOR
 
 
@@ -48,7 +48,7 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                                        name='target_seq_length')
 
     # attention model for training
-    decoder_output, total_loss_avg, entropy_loss_avg, reward_predicted = \
+    _, total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted = \
         build_attention_model(params, src_vocab, trg_vocab, source_ids,
                               source_seq_length, target_ids,
                               target_seq_length, mode=mode)
@@ -60,7 +60,6 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                                   source_seq_length, target_ids,
                                   target_seq_length, mode=MODE.EVAL)
 
-
     # optimizer
     optimizer = tf.train.AdamOptimizer(lr_rate)
     baseline_train_op = None
@@ -69,11 +68,10 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
         baseline_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
                                           'baseline')
         baseline_train_op = optimizer.minimize(total_loss_avg,
-                                            var_list=baseline_vars)
+                                               var_list=baseline_vars)
 
     gradients, variables = zip(*optimizer.compute_gradients(total_loss_avg))
     gradients_norm = tf.global_norm(gradients)
-
 
     gradients, _ = tf.clip_by_global_norm(gradients, clip_gradient_norm,
                                           use_norm=gradients_norm)
@@ -83,8 +81,8 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
     tf.summary.scalar('total_loss', total_loss_avg)
     tf.summary.scalar('entropy_loss_avg', entropy_loss_avg)
     tf.summary.scalar('reward_predicted', reward_predicted)
+    tf.summary.scalar('reward_loss_rmse', reward_loss_rmse)
     tf.summary.scalar('gradients_norm', gradients_norm)
-
 
     # Create a saver object which will save all the variables
     saver = tf.train.Saver(max_to_keep=3)
@@ -126,6 +124,7 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                                         target_ids: trg_np,
                                         target_seq_length: trg_len_np})
                 train_writer.add_summary(summary, global_step)
+                global_step += 1
 
         tf.logging.info('Train model ...')
 
@@ -175,28 +174,36 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
-    configs = get_config('word2pos')
-    lr_rate = configs.lr_rate
-    clip_gradient_norm = configs.clip_gradient_norm
-    if len(sys.argv) > 1:
-        if sys.argv[1] == 'train':
-            mode = MODE.TRAIN
-        elif sys.argv[1] == 'rl':
-            mode = MODE.RL
-            lr_rate = configs.rl_lr_rate
-            clip_gradient_norm = configs.rl_clip_gradient_norm
-        else:
-            raise Exception('Not supported')
+
+    all_configs = [i for i in dir(config) if i.startswith('config_')]
+
+    parser = argparse.ArgumentParser(description='Sequencing Training ...')
+    parser.add_argument('--config', choices=all_configs,
+                        help='specific config name, like {}, '
+                             'see config.py'.format(all_configs),
+                        required=True)
+    parser.add_argument('--mode', choices=['train', 'rl'], default='train')
+
+    args = parser.parse_args()
+
+    training_configs = getattr(config, args.config)()
+
+    if args.mode == 'rl':
+        mode = MODE.RL
+        lr_rate = training_configs.rl_lr_rate
+        clip_gradient_norm = training_configs.rl_clip_gradient_norm
     else:
         mode = MODE.TRAIN
+        lr_rate = training_configs.lr_rate
+        clip_gradient_norm = training_configs.clip_gradient_norm
 
-    train(configs.src_vocab, configs.train_src_file,
-          configs.trg_vocab, configs.train_trg_file,
-          params=configs.params,
-          batch_size=configs.batch_size,
-          train_steps=configs.train_steps,
+    train(training_configs.src_vocab, training_configs.train_src_file,
+          training_configs.trg_vocab, training_configs.train_trg_file,
+          params=training_configs.params,
+          batch_size=training_configs.batch_size,
+          train_steps=training_configs.train_steps,
           lr_rate=lr_rate,
           clip_gradient_norm=clip_gradient_norm,
-          model_dir=configs.model_dir,
-          pretrain_baseline_steps=configs.pretrain_baseline_steps,
+          model_dir=training_configs.model_dir,
+          pretrain_baseline_steps=training_configs.pretrain_baseline_steps,
           mode=mode)
