@@ -5,12 +5,14 @@
 #   GitHub: https://github.com/SwordYork/sequencing
 #   No rights reserved.
 #
+import argparse
+
 import numpy
 import tensorflow as tf
 
+import config
 from build_inputs import build_parallel_inputs
 from build_model import build_attention_model, optimistic_restore
-from config import get_config
 from sequencing import MODE
 
 
@@ -107,12 +109,41 @@ def infer(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
-    configs = get_config('word2pos')
 
-    infer(configs.src_vocab, configs.test_src_file,
-          configs.trg_vocab, configs.test_trg_file,
-          configs.params,
-          beam_size=configs.beam_size,
-          batch_size=configs.batch_size,
-          max_step=configs.max_step,
-          model_dir=configs.model_dir)
+    all_configs = [i for i in dir(config) if i.startswith('config_')]
+
+    parser = argparse.ArgumentParser(description='Sequencing Training ...')
+    parser.add_argument('--config', choices=all_configs,
+                        help='specific config name, like {}, '
+                             'see config.py'.format(all_configs),
+                        required=True)
+    parser.add_argument('--test-src', type=str,
+                        help='test src file')
+    parser.add_argument('--test-trg', type=str,
+                        help='test trg file')
+    parser.add_argument('--output-file', type=str,
+                        help='test output file',
+                        default='test.out')
+
+    args = parser.parse_args()
+    training_configs = getattr(config, args.config)()
+
+    test_src_file = args.test_src if args.test_src else training_configs.test_src_file
+
+    if args.test_src and not args.test_trg:
+        test_trg_file = args.test_src
+    elif args.test_src and args.test_trg:
+        test_trg_file = args.test_trg
+    else:
+        test_trg_file = training_configs.test_trg_file
+
+    output_file = args.output_file
+
+    infer(training_configs.src_vocab, test_src_file,
+          training_configs.trg_vocab, test_trg_file,
+          training_configs.params,
+          beam_size=training_configs.beam_size,
+          batch_size=training_configs.batch_size,
+          max_step=training_configs.max_step,
+          model_dir=training_configs.model_dir,
+          output_file=output_file)
