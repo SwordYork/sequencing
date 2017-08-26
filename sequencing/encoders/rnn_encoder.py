@@ -139,6 +139,7 @@ class StackBidirectionalRNNEncoder(Encoder):
             dtype=DTYPE,
             scope=self.name,
             time_major=self.time_major,
+            swap_memory=True,
             **kwargs)
 
         attention_keys = \

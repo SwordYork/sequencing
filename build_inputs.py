@@ -119,7 +119,7 @@ def build_parallel_inputs(src_vocab, trg_vocab, src_data_file,
                                 trg_np[idx, :len(l[1])] = l[1]
 
                         # shuffle batches
-                        if mode == MODE.TRAIN and rand_append and \
+                        if (mode == MODE.TRAIN or mode == MODE.RL) and rand_append and \
                                 random.randint(0, 1):
                             read_buffer.append((src_np, src_len_np,
                                                 trg_np, trg_len_np))

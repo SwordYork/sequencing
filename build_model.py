@@ -252,6 +252,7 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
     decoder = sq.AttentionRNNDecoder(decoder_params, attention,
                                      feedback, mode=mode)
     decoder_output, decoder_final_state = sq.dynamic_decode(decoder,
+                                                            swap_memory=True,
                                                             scope='decoder')
 
     # not training

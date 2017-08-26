@@ -85,7 +85,8 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
     tf.summary.scalar('gradients_norm', gradients_norm)
 
     # Create a saver object which will save all the variables
-    saver = tf.train.Saver(max_to_keep=3)
+    saver = tf.train.Saver(var_list=tf.trainable_variables(),
+                           max_to_keep=3)
 
     # GPU config
     config = tf.ConfigProto()
