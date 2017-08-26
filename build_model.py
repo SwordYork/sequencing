@@ -202,11 +202,13 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
         tf.logging.info('BUILDING TRAIN FEEDBACK WITH {} TEACHER_RATE'
                         '......'.format(teacher_rate))
         feedback = sq.TrainingFeedBack(target_ids, target_seq_length,
-                                       trg_vocab, teacher_rate)
+                                       trg_vocab, teacher_rate,
+                                       max_step=max_step)
     elif mode == MODE.EVAL:
         tf.logging.info('BUILDING EVAL FEEDBACK ......')
         feedback = sq.TrainingFeedBack(target_ids, target_seq_length,
-                                       trg_vocab, 0.)
+                                       trg_vocab, 0.,
+                                       max_step=max_step)
     else:
         tf.logging.info('BUILDING INFER FEEDBACK WITH BEAM_SIZE {}'
                         '......'.format(beam_size))

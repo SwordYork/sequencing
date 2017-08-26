@@ -18,9 +18,10 @@ from sequencing import MODE, TIME_MAJOR
 
 
 def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
-          params, batch_size=1, train_steps=200000, lr_rate=0.0005,
-          clip_gradient_norm=5., check_every_step=500, model_dir='models/',
-          pretrain_baseline_steps=500, mode=MODE.TRAIN):
+          params, batch_size=1, max_step=300, train_steps=200000,
+          lr_rate=0.0005, clip_gradient_norm=5., check_every_step=500,
+          model_dir='models/', pretrain_baseline_steps=500,
+          mode=MODE.TRAIN):
     # ------------------------------------
     # prepare data
     # ------------------------------------
@@ -51,14 +52,16 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
     _, total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted = \
         build_attention_model(params, src_vocab, trg_vocab, source_ids,
                               source_seq_length, target_ids,
-                              target_seq_length, mode=mode)
+                              target_seq_length, mode=mode,
+                              max_step=max_step)
 
     # attention model for evaluating
     with tf.variable_scope(tf.get_variable_scope(), reuse=True):
         decoder_output_eval, _ = \
             build_attention_model(params, src_vocab, trg_vocab, source_ids,
                                   source_seq_length, target_ids,
-                                  target_seq_length, mode=MODE.EVAL)
+                                  target_seq_length, mode=MODE.EVAL,
+                                  max_step=max_step)
 
     # optimizer
     optimizer = tf.train.AdamOptimizer(lr_rate)
@@ -202,6 +205,7 @@ if __name__ == '__main__':
           training_configs.trg_vocab, training_configs.train_trg_file,
           params=training_configs.params,
           batch_size=training_configs.batch_size,
+          max_step=training_configs.max_step,
           train_steps=training_configs.train_steps,
           lr_rate=lr_rate,
           clip_gradient_norm=clip_gradient_norm,

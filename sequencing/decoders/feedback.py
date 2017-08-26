@@ -78,7 +78,7 @@ class FeedBack(metaclass=ABCMeta):
 
 class TrainingFeedBack(FeedBack):
     def __init__(self, input_ids, sequence_length, vocab, teacher_rate=1.,
-                 name='feedback'):
+                 max_step=300, name='feedback'):
         """
         FeedBack when training, i.e. teacher forcing feedback.
 
@@ -88,7 +88,7 @@ class TrainingFeedBack(FeedBack):
         :param teacher_rate: float, related to DAD, teacher forcing.
         :param name:
         """
-        super(TrainingFeedBack, self).__init__(vocab, name=name)
+        super(TrainingFeedBack, self).__init__(vocab, max_step, name=name)
 
         # We need to convert first, because we may input numpy array
         inputs = tf.convert_to_tensor(input_ids, name='inputs')
@@ -123,19 +123,29 @@ class TrainingFeedBack(FeedBack):
         return sample_ids
 
     def next_inputs(self, time, sample_ids=None):
-        finished = tf.greater_equal(time + 1, self.sequence_length)
+        if sample_ids is None or self.teacher_rate > 0.:
+            finished = tf.greater_equal(time + 1, self.sequence_length)
+        else:
+            finished = math_ops.logical_or(
+                tf.greater_equal(time + 1, self.max_step),
+                tf.equal(self.eos_id, sample_ids))
+
         if self.teacher_rate == 1. or (sample_ids is None):
             next_input_ids = self._input_tas.read(time)
             return finished, self.lookup(next_input_ids)
 
-        # scheduled
-        teacher_rates = tf.less_equal(
-            tf.random_uniform(tf.shape(sample_ids), minval=0., maxval=1.),
-            self.teacher_rate)
-        teacher_rates = tf.to_int32(teacher_rates)
+        if self.teacher_rate > 0.:
+            # scheduled
+            teacher_rates = tf.less_equal(
+                tf.random_uniform(tf.shape(sample_ids), minval=0., maxval=1.),
+                self.teacher_rate)
+            teacher_rates = tf.to_int32(teacher_rates)
 
-        next_input_ids = (teacher_rates * self._input_tas.read(time)
-                          + (1 - teacher_rates) * sample_ids)
+            next_input_ids = (teacher_rates * self._input_tas.read(time)
+                              + (1 - teacher_rates) * sample_ids)
+        else:
+            next_input_ids = sample_ids
+
 
         return finished, self.lookup(next_input_ids)
 
