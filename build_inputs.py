@@ -28,9 +28,8 @@ def build_parallel_inputs(src_vocab, trg_vocab, src_data_file,
     # data file should be preprocessed. For example, tokenize and remove long
     # lines.
 
-    read_buffer = deque(maxlen=buffer_size)
-
     def _parallel_generator():
+        read_buffer = deque(maxlen=buffer_size)
         should_stop_read = False
         with open(src_data_file) as src_data, open(trg_data_file) as trg_data:
             while True:
@@ -118,14 +117,12 @@ def build_parallel_inputs(src_vocab, trg_vocab, src_data_file,
                                 src_np[idx, :len(l[0])] = l[0]
                                 trg_np[idx, :len(l[1])] = l[1]
 
-                        # shuffle batches
-                        if (mode == MODE.TRAIN or mode == MODE.RL) and rand_append and \
-                                random.randint(0, 1):
-                            read_buffer.append((src_np, src_len_np,
-                                                trg_np, trg_len_np))
-                        else:
-                            read_buffer.appendleft((src_np, src_len_np,
-                                                    trg_np, trg_len_np))
+                        read_buffer.append((src_np, src_len_np,
+                                            trg_np, trg_len_np))
+
+                    # shuffle batches
+                    if (mode == MODE.TRAIN or mode == MODE.RL) and rand_append:
+                        random.shuffle(read_buffer)
 
                 s, sl, t, tl = read_buffer.pop()
                 yield s, sl, t, tl
