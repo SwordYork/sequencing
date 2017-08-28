@@ -8,9 +8,8 @@ TrainingConfigs = namedtuple('TrainingConfigs',
                               'test_src_file', 'test_trg_file',
                               'beam_size', 'batch_size',
                               'max_step', 'model_dir',
-                              'lr_rate', 'rl_lr_rate',
-                              'clip_gradient_norm', 'rl_clip_gradient_norm',
-                              'pretrain_baseline_steps', 'train_steps'])
+                              'lr_rate', 'clip_gradient_norm',
+                              'burn_in_step', 'increment_step', 'train_steps'])
 
 
 def config_word2pos():
@@ -44,10 +43,9 @@ def config_word2pos():
         max_step=100,
         model_dir='models',
         lr_rate=0.001,
-        rl_lr_rate=0.0001,
         clip_gradient_norm=5.,
-        rl_clip_gradient_norm=5.,
-        pretrain_baseline_steps=1000,
+        burn_in_step=3000,
+        increment_step=1000,
         train_steps=200000)
 
     return configs
@@ -84,10 +82,9 @@ def config_en2zh():
         max_step=150,
         model_dir='models',
         lr_rate=0.0005,
-        rl_lr_rate=0.0001,
         clip_gradient_norm=5.,
-        rl_clip_gradient_norm=5.,
-        pretrain_baseline_steps=1000,
+        burn_in_step=50000,
+        increment_step=10000,
         train_steps=200000)
 
     return configs
@@ -124,10 +121,9 @@ def config_en2zh_large():
         max_step=150,
         model_dir='models',
         lr_rate=5e-4,
-        rl_lr_rate=5e-5,
         clip_gradient_norm=5.,
-        rl_clip_gradient_norm=5.,
-        pretrain_baseline_steps=1000,
+        burn_in_step=100000,
+        increment_step=20000,
         train_steps=400000)
 
     return configs

@@ -9,8 +9,9 @@ import random
 from collections import deque
 
 import numpy
-import sequencing as sq
 import tensorflow as tf
+
+import sequencing as sq
 from sequencing import MODE, TIME_MAJOR
 
 
@@ -117,8 +118,8 @@ def build_parallel_inputs(src_vocab, trg_vocab, src_data_file,
                                 src_np[idx, :len(l[0])] = l[0]
                                 trg_np[idx, :len(l[1])] = l[1]
 
-                        read_buffer.append((src_np, src_len_np,
-                                            trg_np, trg_len_np))
+                        read_buffer.appendleft((src_np, src_len_np,
+                                                trg_np, trg_len_np))
 
                     # shuffle batches
                     if (mode == MODE.TRAIN or mode == MODE.RL) and rand_append:

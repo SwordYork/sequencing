@@ -63,18 +63,39 @@ def cross_entropy_sequence_loss(logits, targets, sequence_length):
         return total_loss_avg
 
 
-def rl_sequence_loss(logits, targets, sequence_length, baseline_states, reward):
+def rl_sequence_loss(logits, targets, predict_ids, sequence_length,
+                     baseline_states, reward, start_rl_step):
     # reward: T * B
     with tf.name_scope('rl_sequence_loss'):
-        total_length = tf.to_float(tf.reduce_sum(sequence_length))
-
-        entropy_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=logits, labels=targets)
+        max_ml_step = tf.to_int32(tf.maximum(tf.reduce_max(start_rl_step), 0))
+        # ML loss
+        ml_entropy_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=tf.slice(logits, [0, 0, 0], [max_ml_step, -1, -1]),
+            labels=tf.slice(targets, [0, 0], [max_ml_step, -1]))
 
         # Mask out the losses we don't care about
-        loss_mask = tf.sequence_mask(
-            tf.to_int32(sequence_length), tf.to_int32(tf.shape(targets)[0]))
-        loss_mask = tf.transpose(tf.to_float(loss_mask), [1, 0])
+        ml_loss_mask = tf.sequence_mask(
+            tf.to_int32(start_rl_step), max_ml_step)
+        ml_loss_mask = tf.transpose(tf.to_float(ml_loss_mask), [1, 0])
+
+        ml_loss = tf.reduce_sum(ml_entropy_losses * ml_loss_mask) / \
+                  tf.maximum(tf.reduce_sum(ml_loss_mask), 1)
+
+        rl_entropy_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=logits, labels=predict_ids)
+
+        # Mask out the losses we don't care about
+        rl_loss_mask = (
+            tf.to_float(tf.sequence_mask(tf.to_int32(sequence_length),
+                                         tf.to_int32(tf.shape(predict_ids)[0])))
+            - tf.to_float(tf.sequence_mask(tf.to_int32(start_rl_step),
+                                           tf.to_int32(
+                                               tf.shape(predict_ids)[0]))))
+
+        rl_loss_mask = tf.transpose(tf.to_float(rl_loss_mask), [1, 0])
+
+        # prevent from dividing by zero
+        rl_total = tf.maximum(tf.reduce_sum(rl_loss_mask), 1)
 
         with tf.variable_scope('baseline'):
             reward_predicted_m = tf.contrib.layers.fully_connected(
@@ -87,20 +108,17 @@ def rl_sequence_loss(logits, targets, sequence_length, baseline_states, reward):
         reward_predicted = tf.squeeze(reward_predicted)
 
         reward_losses = tf.pow(reward_predicted - reward, 2)
-
-        reward_loss_rmse = tf.sqrt(tf.reduce_sum(reward_losses * loss_mask) /
-                                   total_length)
+        reward_loss_rmse = tf.sqrt(
+            tf.reduce_sum(reward_losses * rl_loss_mask) / rl_total + 1e-12)
 
         reward_entropy_losses = (reward - tf.stop_gradient(reward_predicted)) \
-                                * entropy_losses * loss_mask
-
+                                * rl_entropy_losses * rl_loss_mask
+        reward_entropy_loss = tf.reduce_sum(reward_entropy_losses) / rl_total
         # Calculate the average log perplexity in each batch
-        total_loss_avg = tf.reduce_sum(
-            reward_entropy_losses) / total_length + reward_loss_rmse
-
+        total_loss_avg = ml_loss + reward_entropy_loss + reward_loss_rmse
         # the first reward predict is total reward
         return total_loss_avg, \
-               tf.reduce_sum(entropy_losses * loss_mask) / total_length, \
+               ml_loss, \
                reward_loss_rmse, \
                tf.reduce_mean(tf.slice(reward_predicted, [0, 0], [1, -1]))
 
@@ -137,6 +155,7 @@ def _py_func(predict_target_ids, ground_truth_ids, eos_id):
 def build_attention_model(params, src_vocab, trg_vocab, source_ids,
                           source_seq_length, target_ids, target_seq_length,
                           beam_size=1, mode=MODE.TRAIN,
+                          burn_in_step=100000, increment_step=10000,
                           teacher_rate=1.0, max_step=100):
     """
     Build a model.
@@ -196,7 +215,10 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
     if mode == MODE.RL:
         tf.logging.info('BUILDING RL TRAIN FEEDBACK......')
         dynamical_batch_size = tf.shape(attention_keys)[1]
-        feedback = sq.RLTrainingFeedBack(trg_vocab, dynamical_batch_size,
+        feedback = sq.RLTrainingFeedBack(target_ids, target_seq_length,
+                                         trg_vocab, dynamical_batch_size,
+                                         burn_in_step=burn_in_step,
+                                         increment_step=increment_step,
                                          max_step=max_step)
     elif mode == MODE.TRAIN:
         tf.logging.info('BUILDING TRAIN FEEDBACK WITH {} TEACHER_RATE'
@@ -279,12 +301,23 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
             Tout=[tf.float32, tf.int32],
             name='reward')
         sequence_length.set_shape((None,))
+
+        # Creates a variable to hold the global_step.
+        global_step_tensor = tf.get_collection(
+            tf.GraphKeys.GLOBAL_VARIABLES, scope='global_step')[0]
+        rl_time_steps = tf.floordiv(tf.maximum(global_step_tensor -
+                                               burn_in_step, 0),
+                                    increment_step)
+        start_rl_step = target_seq_length - rl_time_steps
+
         total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted \
             = rl_sequence_loss(
             logits=decoder_output.logits,
-            targets=predict_ids,
+            targets=ground_truth_ids,
+            predict_ids=predict_ids,
             sequence_length=sequence_length,
             baseline_states=baseline_states,
+            start_rl_step=start_rl_step,
             reward=reward)
         return decoder_output, total_loss_avg, entropy_loss_avg, \
                reward_loss_rmse, reward_predicted

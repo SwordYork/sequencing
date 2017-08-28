@@ -97,10 +97,11 @@ class TrainingFeedBack(FeedBack):
 
         if TIME_MAJOR:
             self.batch_size = tf.shape(inputs)[1]  # should be dynamical
-            self._input_tas = _unstack_ta(inputs)
         else:
             self.batch_size = tf.shape(inputs)[0]  # should be dynamical
             inputs = _transpose_batch_time(inputs)
+
+        if teacher_rate > 0.:
             self._input_tas = _unstack_ta(inputs)
 
         sequence_length = tf.convert_to_tensor(
@@ -118,7 +119,7 @@ class TrainingFeedBack(FeedBack):
 
         return finished, inputs
 
-    def sample(self, logits):
+    def sample(self, logits, time=None):
         sample_ids = tf.cast(tf.argmax(logits, axis=-1), dtypes.int32)
         return sample_ids
 
@@ -146,25 +147,47 @@ class TrainingFeedBack(FeedBack):
         else:
             next_input_ids = sample_ids
 
-
         return finished, self.lookup(next_input_ids)
 
 
 class RLTrainingFeedBack(FeedBack):
-    def __init__(self, vocab, batch_size, max_step=300, greedy=False,
+    def __init__(self, input_ids, sequence_length, vocab, batch_size,
+                 burn_in_step, increment_step, max_step=300,
                  name='feedback'):
         """
-        FeedBack when using RL, i.e. greedy feedback.
+        FeedBack when using RL, i.e. greedy feedback. But incrementally greedy.
 
-        :param batch_size: should be dynamical
+        :param input_ids: index of sequence, including end of sequence (EOS).
+        :param sequence_length:
         :param vocab: object, see `data/vocab.py`
+        :param batch_size: should be dynamical
+        :param burn_in_step:
+        :param increment_step:
         :param max_step:
         :param name:
         """
         super(RLTrainingFeedBack, self).__init__(vocab, max_step, name=name)
 
+        # We need to convert first, because we may input numpy array
+        inputs = tf.convert_to_tensor(input_ids, name='inputs')
+
+        if not TIME_MAJOR:
+            inputs = _transpose_batch_time(inputs)
+
+        self._input_tas = _unstack_ta(inputs)
+
+        sequence_length = tf.convert_to_tensor(
+            sequence_length, name='sequence_length')
+        self.sequence_length = sequence_length
+
+        # Creates a variable to hold the global_step.
+        self.global_step_tensor = tf.get_collection(
+            tf.GraphKeys.GLOBAL_VARIABLES, scope='global_step')[0]
+
+        self.burn_in_step = burn_in_step
+        self.increment_step = increment_step
         self.batch_size = batch_size
-        self.greedy = greedy
+        self.max_sequence_length = tf.shape(inputs)[0]
         with tf.variable_scope(name):
             self.lookup = LookUpOp(vocab.vocab_size, vocab.embedding_dim)
 
@@ -176,16 +199,27 @@ class RLTrainingFeedBack(FeedBack):
 
         return finished, inputs
 
-    def sample(self, logits):
-        if self.greedy:
-            return tf.cast(tf.argmax(logits, axis=-1), dtypes.int32)
+    def sample(self, logits, time):
+        rl_time_steps = tf.floordiv(tf.maximum(self.global_step_tensor -
+                                               self.burn_in_step, 0),
+                                    self.increment_step)
+        start_rl_step = self.sequence_length - rl_time_steps
 
-        return tf.cast(tf.squeeze(tf.multinomial(logits, 1), axis=[-1]),
-                       dtypes.int32)
+        next_input_ids = tf.cond(
+            tf.greater_equal(time, self.max_sequence_length),
+            lambda: tf.tile([self.eos_id], [self.batch_size]),
+            lambda: self._input_tas.read(time))
+
+        next_predicted_ids = tf.squeeze(tf.multinomial(logits, 1), axis=[-1])
+        mask = tf.to_int32(time >= start_rl_step)
+
+        return (1 - mask) * tf.to_int32(next_input_ids) + mask * tf.to_int32(
+            next_predicted_ids)
 
     def next_inputs(self, time, sample_ids):
         finished = math_ops.logical_or(
-            tf.greater_equal(time + 1, self.max_step),
+            tf.greater_equal(time + 1, tf.maximum(self.max_step,
+                                                  self.max_sequence_length)),
             tf.equal(self.eos_id, sample_ids))
         return finished, self.lookup(sample_ids)
 

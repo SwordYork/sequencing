@@ -9,7 +9,6 @@ from collections import namedtuple
 
 import tensorflow as tf
 from tensorflow.contrib.rnn import LSTMStateTuple
-from tensorflow.python.framework import dtypes
 
 from .decoder import Decoder
 from .. import MODE, DTYPE
@@ -82,7 +81,6 @@ class AttentionRNNDecoder(Decoder):
             self.output_dtype = self.output_tuple(logits=DTYPE,
                                                   predicted_ids=tf.int32,
                                                   beam_ids=tf.int32)
-
 
     def _default_params(self):
         return {'rnn_cell': {'cell_name': 'GRUCell',
@@ -168,7 +166,7 @@ class AttentionRNNDecoder(Decoder):
         cell_output_new, logits, attention_scores, attention_context = \
             self.compute_output(cell_output)
 
-        sample_ids = self.feedback.sample(logits=logits)
+        sample_ids = self.feedback.sample(logits=logits, time=time)
 
         if self.mode == MODE.RL:
             outputs = self.output_tuple(
@@ -186,7 +184,7 @@ class AttentionRNNDecoder(Decoder):
         next_inputs = tf.concat([next_inputs, attention_context], 1)
 
         # We don't mask state and outputs in train step, it should be masked as:
-        if self.mode == MODE.TRAIN:
+        if self.mode == MODE.TRAIN or self.mode == MODE.RL:
             next_state = self.state_tuple(cell_states=cell_states)
         else:
             # once finished, always EOS
