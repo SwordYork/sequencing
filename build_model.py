@@ -68,6 +68,8 @@ def rl_sequence_loss(logits, targets, predict_ids, sequence_length,
     # reward: T * B
     with tf.name_scope('rl_sequence_loss'):
         max_ml_step = tf.to_int32(tf.maximum(tf.reduce_max(start_rl_step), 0))
+        min_ml_step = tf.to_int32(tf.maximum(tf.reduce_min(start_rl_step), 0))
+
         # ML loss
         ml_entropy_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
             logits=tf.slice(logits, [0, 0, 0], [max_ml_step, -1, -1]),
@@ -81,19 +83,25 @@ def rl_sequence_loss(logits, targets, predict_ids, sequence_length,
         ml_loss = tf.reduce_sum(ml_entropy_losses * ml_loss_mask) / \
                   tf.maximum(tf.reduce_sum(ml_loss_mask), 1)
 
+        # RL
         rl_entropy_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=logits, labels=predict_ids)
+            logits=tf.slice(logits, [min_ml_step, 0, 0], [-1, -1, -1]),
+            labels=tf.slice(predict_ids, [min_ml_step, 0], [-1, -1]))
 
         # Mask out the losses we don't care about
         rl_loss_mask = (
-            tf.to_float(tf.sequence_mask(tf.to_int32(sequence_length),
-                                         tf.to_int32(tf.shape(predict_ids)[0])))
-            - tf.to_float(tf.sequence_mask(tf.to_int32(start_rl_step),
-                                           tf.to_int32(
-                                               tf.shape(predict_ids)[0]))))
+            tf.to_float(tf.sequence_mask(
+                tf.to_int32(sequence_length - min_ml_step),
+                tf.to_int32(tf.shape(predict_ids)[0] - min_ml_step)))
+            - tf.to_float(tf.sequence_mask(
+                tf.to_int32(start_rl_step - min_ml_step),
+                tf.to_int32(tf.shape(predict_ids)[0] - min_ml_step))))
 
         rl_loss_mask = tf.transpose(tf.to_float(rl_loss_mask), [1, 0])
+        baseline_states = tf.slice(baseline_states, [min_ml_step, 0, 0],
+                                   [-1, -1, -1])
 
+        reward = tf.slice(reward, [min_ml_step, 0], [-1, -1])
         # prevent from dividing by zero
         rl_total = tf.maximum(tf.reduce_sum(rl_loss_mask), 1)
 
@@ -105,7 +113,7 @@ def rl_sequence_loss(logits, targets, predict_ids, sequence_length,
             reward_predicted = tf.contrib.layers.fully_connected(
                 reward_predicted_m, 1, activation_fn=None)
 
-        reward_predicted = tf.squeeze(reward_predicted)
+        reward_predicted = tf.squeeze(reward_predicted, axis=[2])
 
         reward_losses = tf.pow(reward_predicted - reward, 2)
         reward_loss_rmse = tf.sqrt(
@@ -114,13 +122,20 @@ def rl_sequence_loss(logits, targets, predict_ids, sequence_length,
         reward_entropy_losses = (reward - tf.stop_gradient(reward_predicted)) \
                                 * rl_entropy_losses * rl_loss_mask
         reward_entropy_loss = tf.reduce_sum(reward_entropy_losses) / rl_total
+
+        predict_reward = tf.cond(tf.greater(tf.shape(reward_predicted)[0], 0),
+                                 lambda: tf.reduce_mean(
+                                     tf.slice(reward_predicted, [0, 0],
+                                              [1, -1])),
+                                 lambda: tf.to_float(0))
+
         # Calculate the average log perplexity in each batch
         total_loss_avg = ml_loss + reward_entropy_loss + reward_loss_rmse
         # the first reward predict is total reward
         return total_loss_avg, \
                ml_loss, \
                reward_loss_rmse, \
-               tf.reduce_mean(tf.slice(reward_predicted, [0, 0], [1, -1]))
+               predict_reward
 
 
 def _py_func(predict_target_ids, ground_truth_ids, eos_id):
