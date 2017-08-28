@@ -123,7 +123,7 @@ class TrainingFeedBack(FeedBack):
         sample_ids = tf.cast(tf.argmax(logits, axis=-1), dtypes.int32)
         return sample_ids
 
-    def next_inputs(self, time, sample_ids=None):
+    def next_inputs(self, time, sample_ids=None, prev_finished=None):
         if sample_ids is None or self.teacher_rate > 0.:
             finished = tf.greater_equal(time + 1, self.sequence_length)
         else:
@@ -216,12 +216,13 @@ class RLTrainingFeedBack(FeedBack):
         return (1 - mask) * tf.to_int32(next_input_ids) + mask * tf.to_int32(
             next_predicted_ids)
 
-    def next_inputs(self, time, sample_ids):
+    def next_inputs(self, time, sample_ids, prev_finished):
         finished = math_ops.logical_or(
             tf.greater_equal(time + 1, tf.maximum(self.max_step,
                                                   self.max_sequence_length)),
             tf.equal(self.eos_id, sample_ids))
-        return finished, self.lookup(sample_ids)
+        next_finished = math_ops.logical_or(finished, prev_finished)
+        return next_finished, self.lookup(sample_ids)
 
 
 class BeamFeedBack(FeedBack):

@@ -50,7 +50,8 @@ class AttentionRNNDecoder(Decoder):
                                           ['cell_states', 'log_probs',
                                            'finished'])
         else:
-            self.state_tuple = namedtuple('decoder_state', ['cell_states'])
+            self.state_tuple = namedtuple('decoder_state', ['cell_states',
+                                                            'finished'])
 
         if self.mode == MODE.TRAIN or self.mode == MODE.EVAL:
             self.output_tuple = namedtuple('output',
@@ -104,7 +105,7 @@ class AttentionRNNDecoder(Decoder):
 
         if self.mode != MODE.INFER:
             return finished, first_inputs, self.state_tuple(
-                cell_states=initial_state)
+                cell_states=initial_state, finished=finished)
         else:
             log_probs = tf.zeros([self.batch_size, ])
             state = self.state_tuple(cell_states=initial_state,
@@ -179,18 +180,20 @@ class AttentionRNNDecoder(Decoder):
                 predicted_ids=sample_ids)
 
         finished, next_inputs = self.feedback.next_inputs(time=time,
-                                                          sample_ids=sample_ids)
+                                                          sample_ids=sample_ids,
+                                                          prev_finished=state.finished)
 
         next_inputs = tf.concat([next_inputs, attention_context], 1)
 
         # We don't mask state and outputs in train step, it should be masked as:
         if self.mode == MODE.TRAIN or self.mode == MODE.RL:
-            next_state = self.state_tuple(cell_states=cell_states)
+            next_state = self.state_tuple(cell_states=cell_states,
+                                          finished=finished)
         else:
             # once finished, always EOS
             next_state = self.mask_finished(finished, cell_states,
                                             state.cell_states)
-            next_state = self.state_tuple(cell_states=next_state)
+            next_state = self.state_tuple(cell_states=next_state, finished=finished)
             next_inputs = self.mask_finished(finished, next_inputs, inputs)
 
         return (outputs, next_state, next_inputs, finished)
