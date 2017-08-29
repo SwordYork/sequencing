@@ -8,9 +8,8 @@
 import json
 
 import numpy
-import tensorflow as tf
-
 import sequencing as sq
+import tensorflow as tf
 from sequencing import TIME_MAJOR, MODE
 from sequencing.utils.metrics import Delta_BLEU
 
@@ -63,17 +62,21 @@ def cross_entropy_sequence_loss(logits, targets, sequence_length):
         return total_loss_avg
 
 
-def rl_sequence_loss(logits, targets, predict_ids, sequence_length,
+def rl_sequence_loss(logits, predict_ids, sequence_length,
                      baseline_states, reward, start_rl_step):
     # reward: T * B
     with tf.name_scope('rl_sequence_loss'):
         max_ml_step = tf.to_int32(tf.maximum(tf.reduce_max(start_rl_step), 0))
         min_ml_step = tf.to_int32(tf.maximum(tf.reduce_min(start_rl_step), 0))
 
+        # entropy loss:
+        # before start_rl_step is ml entropy
+        # after start_rl_step should be rl entropy
+        entropy_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=logits, labels=predict_ids)
+
         # ML loss
-        ml_entropy_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=tf.slice(logits, [0, 0, 0], [max_ml_step, -1, -1]),
-            labels=tf.slice(targets, [0, 0], [max_ml_step, -1]))
+        ml_entropy_losses = tf.slice(entropy_losses, [0, 0], [max_ml_step, -1])
 
         # Mask out the losses we don't care about
         ml_loss_mask = tf.sequence_mask(
@@ -84,9 +87,7 @@ def rl_sequence_loss(logits, targets, predict_ids, sequence_length,
                   tf.maximum(tf.reduce_sum(ml_loss_mask), 1)
 
         # RL
-        rl_entropy_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=tf.slice(logits, [min_ml_step, 0, 0], [-1, -1, -1]),
-            labels=tf.slice(predict_ids, [min_ml_step, 0], [-1, -1]))
+        rl_entropy_losses = tf.slice(entropy_losses, [min_ml_step, 0], [-1, -1])
 
         # Mask out the losses we don't care about
         rl_loss_mask = (
@@ -307,16 +308,6 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
 
     # construct the loss
     if mode == MODE.RL:
-        baseline_states = tf.stop_gradient(decoder_output.baseline_states)
-        predict_ids = tf.stop_gradient(decoder_output.predicted_ids)
-
-        reward, sequence_length = tf.py_func(
-            func=_py_func,
-            inp=[predict_ids, ground_truth_ids, trg_vocab.eos_id],
-            Tout=[tf.float32, tf.int32],
-            name='reward')
-        sequence_length.set_shape((None,))
-
         # Creates a variable to hold the global_step.
         global_step_tensor = tf.get_collection(
             tf.GraphKeys.GLOBAL_VARIABLES, scope='global_step')[0]
@@ -325,10 +316,24 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
                                     increment_step)
         start_rl_step = target_seq_length - rl_time_steps
 
+        baseline_states = tf.stop_gradient(decoder_output.baseline_states)
+        predict_ids = tf.stop_gradient(decoder_output.predicted_ids)
+
+        # TODO: bug in tensorflow
+        ground_or_predict_ids = tf.cond(tf.greater(rl_time_steps, 0),
+                                        lambda: predict_ids,
+                                        lambda: ground_truth_ids)
+
+        reward, sequence_length = tf.py_func(
+            func=_py_func,
+            inp=[ground_or_predict_ids, ground_truth_ids, trg_vocab.eos_id],
+            Tout=[tf.float32, tf.int32],
+            name='reward')
+        sequence_length.set_shape((None,))
+
         total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted \
             = rl_sequence_loss(
             logits=decoder_output.logits,
-            targets=ground_truth_ids,
             predict_ids=predict_ids,
             sequence_length=sequence_length,
             baseline_states=baseline_states,
