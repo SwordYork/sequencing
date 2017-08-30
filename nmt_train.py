@@ -152,12 +152,15 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                 for i in range(10):
                     pids = predicted_ids_np[:, i].tolist()
                     if TIME_MAJOR:
+                        sids = src_np[:, i].tolist()
                         tids = trg_np[:, i].tolist()
                     else:
+                        sids = src_np[i, :].tolist()
                         tids = trg_np[i, :].tolist()
-                    print(trg_vocab.id_to_token(pids))
-                    print(trg_vocab.id_to_token(tids))
-                    print('----------------------------------')
+                    print('src:', src_vocab.id_to_token(sids))
+                    print('prd:', trg_vocab.id_to_token(pids))
+                    print('trg:', trg_vocab.id_to_token(tids))
+                    print('---------------------------------')
 
 
 if __name__ == '__main__':
