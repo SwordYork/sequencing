@@ -8,8 +8,9 @@
 import json
 
 import numpy
-import sequencing as sq
 import tensorflow as tf
+
+import sequencing as sq
 from sequencing import TIME_MAJOR, MODE
 from sequencing.utils.metrics import Delta_BLEU
 
@@ -170,9 +171,10 @@ def _py_func(predict_target_ids, ground_truth_ids, eos_id):
 
 def build_attention_model(params, src_vocab, trg_vocab, source_ids,
                           source_seq_length, target_ids, target_seq_length,
+                          reward=None, gen_seq_length=None,
                           beam_size=1, mode=MODE.TRAIN,
                           burn_in_step=100000, increment_step=10000,
-                          teacher_rate=1.0, max_step=100):
+                          teacher_rate=1.0, max_step=100, gen_samples=True):
     """
     Build a model.
 
@@ -231,11 +233,16 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
     if mode == MODE.RL:
         tf.logging.info('BUILDING RL TRAIN FEEDBACK......')
         dynamical_batch_size = tf.shape(attention_keys)[1]
-        feedback = sq.RLTrainingFeedBack(target_ids, target_seq_length,
-                                         trg_vocab, dynamical_batch_size,
-                                         burn_in_step=burn_in_step,
-                                         increment_step=increment_step,
-                                         max_step=max_step)
+        if gen_samples:
+            feedback = sq.RLTrainingFeedBack(target_ids, target_seq_length,
+                                             trg_vocab, dynamical_batch_size,
+                                             burn_in_step=burn_in_step,
+                                             increment_step=increment_step,
+                                             max_step=max_step)
+        else:
+            feedback = sq.TrainingFeedBack(target_ids, gen_seq_length,
+                                           trg_vocab, teacher_rate,
+                                           max_step=max_step)
     elif mode == MODE.TRAIN:
         tf.logging.info('BUILDING TRAIN FEEDBACK WITH {} TEACHER_RATE'
                         '......'.format(teacher_rate))
@@ -314,31 +321,34 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
         rl_time_steps = tf.floordiv(tf.maximum(global_step_tensor -
                                                burn_in_step, 0),
                                     increment_step)
-        start_rl_step = target_seq_length - rl_time_steps
+        if gen_samples:
+            predict_ids = tf.stop_gradient(decoder_output.predicted_ids)
 
-        baseline_states = tf.stop_gradient(decoder_output.baseline_states)
-        predict_ids = tf.stop_gradient(decoder_output.predicted_ids)
+            # TODO: bug in tensorflow
+            ground_or_predict_ids = tf.cond(tf.greater(rl_time_steps, 0),
+                                            lambda: predict_ids,
+                                            lambda: ground_truth_ids)
 
-        # TODO: bug in tensorflow
-        ground_or_predict_ids = tf.cond(tf.greater(rl_time_steps, 0),
-                                        lambda: predict_ids,
-                                        lambda: ground_truth_ids)
+            reward_c, sequence_length = tf.py_func(
+                func=_py_func,
+                inp=[ground_or_predict_ids, ground_truth_ids, trg_vocab.eos_id],
+                Tout=[tf.float32, tf.int32],
+                name='reward')
+            sequence_length.set_shape((None,))
 
-        reward, sequence_length = tf.py_func(
-            func=_py_func,
-            inp=[ground_or_predict_ids, ground_truth_ids, trg_vocab.eos_id],
-            Tout=[tf.float32, tf.int32],
-            name='reward')
-        sequence_length.set_shape((None,))
+            return ground_or_predict_ids, reward_c, sequence_length
+        else:
+            start_rl_step = target_seq_length - rl_time_steps
 
-        total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted \
-            = rl_sequence_loss(
-            logits=decoder_output.logits,
-            predict_ids=predict_ids,
-            sequence_length=sequence_length,
-            baseline_states=baseline_states,
-            start_rl_step=start_rl_step,
-            reward=reward)
+            baseline_states = tf.stop_gradient(decoder_output.baseline_states)
+            total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted \
+                = rl_sequence_loss(
+                logits=decoder_output.logits,
+                predict_ids=ground_truth_ids,
+                sequence_length=gen_seq_length,
+                baseline_states=baseline_states,
+                start_rl_step=start_rl_step,
+                reward=reward)
         return decoder_output, total_loss_avg, entropy_loss_avg, \
                reward_loss_rmse, reward_predicted
     else:

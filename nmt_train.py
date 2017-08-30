@@ -16,7 +16,7 @@ import config
 from build_inputs import build_parallel_inputs
 from build_model import build_attention_model, optimistic_restore
 from sequencing import MODE, TIME_MAJOR
-
+import numpy
 
 def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
           params, batch_size=1, max_step=300, train_steps=200000,
@@ -48,7 +48,10 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                                 name='target_ids')
     target_seq_length = tf.placeholder(tf.int32, shape=(None,),
                                        name='target_seq_length')
-
+    reward = tf.placeholder(tf.float32, shape=(None, None),
+                            name='reward')
+    gen_seq_length = tf.placeholder(tf.int32, shape=(None,),
+                                       name='gen_seq_length')
     # Creates a variable to hold the global_step.
     global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
 
@@ -56,10 +59,31 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
     _, total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted = \
         build_attention_model(params, src_vocab, trg_vocab, source_ids,
                               source_seq_length, target_ids,
+                              target_seq_length, reward=reward,
+                              gen_seq_length=gen_seq_length,
+                              mode=mode,
+                              burn_in_step=burn_in_step,
+                              increment_step=increment_step,
+                              max_step=max_step, gen_samples=False)
+
+    with tf.variable_scope(tf.get_variable_scope(), reuse=True):
+        _, total_loss_avg_tr, _, _, _ = \
+            build_attention_model(params, src_vocab, trg_vocab, source_ids,
+                                  source_seq_length, target_ids,
+                                  target_seq_length, mode=MODE.TRAIN,
+                                  burn_in_step=burn_in_step,
+                                  increment_step=increment_step,
+                                  max_step=max_step, gen_samples=False)
+
+
+    with tf.variable_scope(tf.get_variable_scope(), reuse=True):
+        ground_or_predict_ids_gen, reward_gen, sequence_length_gen = \
+        build_attention_model(params, src_vocab, trg_vocab, source_ids,
+                              source_seq_length, target_ids,
                               target_seq_length, mode=mode,
                               burn_in_step=burn_in_step,
                               increment_step=increment_step,
-                              max_step=max_step)
+                              max_step=max_step, gen_samples=True)
 
     # attention model for evaluating
     with tf.variable_scope(tf.get_variable_scope(), reuse=True):
@@ -78,6 +102,15 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
     gradients, _ = tf.clip_by_global_norm(gradients, clip_gradient_norm,
                                           use_norm=gradients_norm)
     train_op = optimizer.apply_gradients(zip(gradients, variables),
+                                         global_step=global_step_tensor)
+
+    gradients_tr, variables_tr = zip(*optimizer.compute_gradients(
+        total_loss_avg_tr))
+    gradients_norm_tr = tf.global_norm(gradients_tr)
+
+    gradients_tr, _ = tf.clip_by_global_norm(gradients_tr, clip_gradient_norm,
+                                          use_norm=gradients_norm_tr)
+    train_op_tr = optimizer.apply_gradients(zip(gradients_tr, variables_tr),
                                          global_step=global_step_tensor)
 
     # record loss curve
@@ -118,16 +151,67 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
         # start training
         start_time = time.time()
+        for step in range(1, burn_in_step):
+            src_np, src_len_np, trg_np, trg_len_np = next(
+                parallel_data_generator)
+            _, total_loss_avg_np, global_step = \
+                sess.run([train_op_tr, total_loss_avg_tr,
+                          global_step_tensor],
+                         feed_dict={source_ids: src_np,
+                                    source_seq_length: src_len_np,
+                                    target_ids: trg_np,
+                                    target_seq_length: trg_len_np})
+            if step % check_every_step == 0:
+                tf.logging.info('start_time: {}, {} steps / sec'.format(
+                    datetime.fromtimestamp(start_time).strftime('%Y-%m-%d '
+                                                                '%H:%M:%S'),
+                    check_every_step / (time.time() - start_time)))
+                tf.logging.info(
+                    'global_step: {}, step: {}, total_loss: {}'.format(
+                        global_step, step, total_loss_avg_np))
+                start_time = time.time()
+
+                saver.save(sess, model_path, global_step=global_step)
+                predicted_ids_np = \
+                    sess.run(decoder_output_eval.predicted_ids,
+                             feed_dict={source_ids: src_np,
+                                        source_seq_length: src_len_np,
+                                        target_ids: trg_np,
+                                        target_seq_length: trg_len_np})
+
+                # print eval results
+                for i in range(10):
+                    pids = predicted_ids_np[:, i].tolist()
+                    if TIME_MAJOR:
+                        tids = trg_np[:, i].tolist()
+                    else:
+                        tids = trg_np[i, :].tolist()
+                    print(trg_vocab.id_to_token(pids))
+                    print(trg_vocab.id_to_token(tids))
+                    print('----------------------------------')
+
         for step in range(1, train_steps):
             src_np, src_len_np, trg_np, trg_len_np = next(
                 parallel_data_generator)
+
+            ground_or_predict_ids_gen_np, reward_gen_np, sequence_length_gen_np \
+                = \
+                sess.run([ground_or_predict_ids_gen, reward_gen,
+                          sequence_length_gen],
+                         feed_dict={source_ids: src_np,
+                                    source_seq_length: src_len_np,
+                                    target_ids: trg_np,
+                                    target_seq_length: trg_len_np})
+
             _, total_loss_avg_np, summary, reward_predicted_np, global_step = \
                 sess.run([train_op, total_loss_avg, summary_merged,
                           reward_predicted, global_step_tensor],
                          feed_dict={source_ids: src_np,
                                     source_seq_length: src_len_np,
-                                    target_ids: trg_np,
-                                    target_seq_length: trg_len_np})
+                                    target_ids: ground_or_predict_ids_gen_np,
+                                    target_seq_length: trg_len_np,
+                                    reward: reward_gen_np,
+                                    gen_seq_length:sequence_length_gen_np})
             train_writer.add_summary(summary, global_step)
 
             if step % check_every_step == 0:
