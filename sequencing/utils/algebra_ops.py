@@ -11,8 +11,11 @@ from .. import DTYPE
 
 
 class LinearOp(object):
-    def __init__(self, input_size, output_size, init_scale=0.001,
+    def __init__(self, input_size, output_size, init_scale=None,
                  name='linear_op'):
+        if not init_scale:
+            init_scale = (6./(input_size + output_size)) ** 0.5
+
         with tf.variable_scope(name):
             self.W = tf.get_variable('weights',
                                      shape=[input_size, output_size],

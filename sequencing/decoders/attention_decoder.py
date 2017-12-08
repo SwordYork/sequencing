@@ -25,6 +25,8 @@ class AttentionRNNDecoder(Decoder):
                  params,
                  attention,
                  feedback,
+                 logits_func,
+                 init_state=None,
                  mode=MODE.TRAIN,
                  name='attention_decoder'):
 
@@ -32,18 +34,18 @@ class AttentionRNNDecoder(Decoder):
         self.params = merge_dict(self._default_params(), params)
         self.state_size = self.params['rnn_cell']['state_size']
         self.vocab_size = feedback.vocab_size
+        self.embedding_dim = feedback.embedding_dim
 
         self.attention = attention
-        self.context_size = self.attention.values.get_shape()[-1]
+        self.context_size = self.attention.values.get_shape().as_list()[-1]
+        self.rnn_init = init_state
         self.feedback = feedback
         self.cell = tf.nn.rnn_cell.MultiRNNCell(get_rnn_cell(self.params[
                                                                  'rnn_cell']))
-        with tf.variable_scope(name):
-            self.attention_mix = LinearOp(self.context_size + self.state_size,
-                                          self.state_size, name='attention_mix')
-            self.logits_trans = LinearOp(self.state_size, self.vocab_size,
-                                         name='logits_trans')
+        self.logits_func = logits_func
+
         self.batch_size = self.feedback.batch_size
+        self.num_layers = self.params['rnn_cell']['num_layers']
 
         if self.mode == MODE.INFER:
             self.state_tuple = namedtuple('beam_decoder_state',
@@ -97,10 +99,13 @@ class AttentionRNNDecoder(Decoder):
         # Concat empty attention context
         attention_context = tf.zeros([
             self.batch_size,
-            self.attention.values.get_shape().as_list()[-1]
+            self.context_size
         ])
 
-        initial_state = self.cell.zero_state(self.batch_size, dtype=DTYPE)
+        if self.rnn_init is None:
+            initial_state = self.cell.zero_state(self.batch_size, dtype=DTYPE)
+        else:
+            initial_state = self.rnn_init
         first_inputs = tf.concat([first_inputs, attention_context], 1)
 
         if self.mode != MODE.INFER:
@@ -116,24 +121,24 @@ class AttentionRNNDecoder(Decoder):
     def finalize(self, final_outputs, final_state):
         return final_outputs, final_state
 
-    def compute_output(self, cell_output):
+    def compute_output(self, inputs, state):
+        cell_output, cell_states = self.cell(inputs, state.cell_states)
         # Compute attention
         att_scores, attention_context = self.attention.compute_scores(
             query=cell_output)
 
+        prev_word_embedding = inputs[:, :self.embedding_dim]
         # TODO: verify whether it is necessary, or follow with a non-linear transform
-        softmax_input = tf.nn.tanh(self.attention_mix(
-            tf.concat([cell_output, attention_context], 1)))
+        softmax_input = tf.concat(
+            [prev_word_embedding, cell_output, attention_context], 1)
 
         if self.params['logits']['input_keep_prob'] < 1.0:
-            softmax_input = tf.layers.dropout(softmax_input,
-                                              1. - self.params['logits'][
-                                                  'input_keep_prob'])
+            softmax_input = tf.nn.dropout(softmax_input,
+                                          self.params['logits'][
+                                              'input_keep_prob'])
+        logits = self.logits_func(softmax_input)
 
-        # Softmax computation
-        logits = self.logits_trans(softmax_input)
-
-        return softmax_input, logits, att_scores, attention_context
+        return softmax_input, logits, att_scores, attention_context, cell_states
 
     def step(self, time, inputs, state):
         if self.mode != MODE.INFER:
@@ -163,9 +168,8 @@ class AttentionRNNDecoder(Decoder):
         return next_
 
     def _train_step(self, time, inputs, state):
-        cell_output, cell_states = self.cell(inputs, state.cell_states)
-        cell_output_new, logits, attention_scores, attention_context = \
-            self.compute_output(cell_output)
+        cell_output_new, logits, attention_scores, attention_context, cell_states = \
+            self.compute_output(inputs, state)
 
         sample_ids = self.feedback.sample(logits=logits, time=time)
 
@@ -199,9 +203,8 @@ class AttentionRNNDecoder(Decoder):
         return (outputs, next_state, next_inputs, finished)
 
     def _beam_step(self, time, inputs, state):
-        cell_output, cell_states = self.cell(inputs, state.cell_states)
-        cell_output_new, logits, attention_scores, attention_context = \
-            self.compute_output(cell_output)
+        cell_output_new, logits, attention_scores, attention_context, cell_states = \
+            self.compute_output(inputs, state)
 
         sample_ids, beam_ids, log_probs = \
             self.feedback.sample(logits=logits,

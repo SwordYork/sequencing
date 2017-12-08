@@ -13,14 +13,14 @@ from datetime import datetime
 import tensorflow as tf
 
 import config
-from build_inputs import build_parallel_inputs
+from build_inputs import build_parallel_char_inputs
 from build_model import build_attention_model
 from sequencing import MODE, TIME_MAJOR, optimistic_restore
 
 
 def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
           params, batch_size=1, max_step=300, train_steps=200000,
-          lr_rate=0.0005, clip_gradient_norm=5., check_every_step=500,
+          lr_rate=0.0005, clip_gradient_norm=5., check_every_step=100,
           model_dir='models/', burn_in_step=500, increment_step=1000,
           mode=MODE.TRAIN):
     # ------------------------------------
@@ -29,9 +29,9 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
     # load parallel data
     parallel_data_generator = \
-        build_parallel_inputs(src_vocab, trg_vocab,
+        build_parallel_char_inputs(src_vocab, trg_vocab,
                               src_data_file, trg_data_file,
-                              batch_size=batch_size, buffer_size=96,
+                              batch_size=batch_size, buffer_size=36,
                               mode=MODE.TRAIN)
 
     # ------------------------------------
@@ -43,20 +43,34 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                                 name='source_ids')
     source_seq_length = tf.placeholder(tf.int32, shape=(None,),
                                        name='source_seq_length')
+    source_sample_matrix = tf.placeholder(tf.float32, shape=(None, None, None),
+                                       name='source_sample_matrix')
+    source_word_seq_length = tf.placeholder(tf.int32, shape=(None,),
+                                       name='source_word_seq_length')
 
     target_ids = tf.placeholder(tf.int32, shape=(None, None),
                                 name='target_ids')
     target_seq_length = tf.placeholder(tf.int32, shape=(None,),
                                        name='target_seq_length')
 
+    source_placeholders = {'src': source_ids,
+                          'src_len': source_seq_length,
+                          'src_sample_matrix':source_sample_matrix,
+                          'src_word_len': source_word_seq_length}
+    target_placeholders = {'trg': target_ids,
+                          'trg_len': target_seq_length}
+
+
+
     # Creates a variable to hold the global_step.
     global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
 
     # attention model for training
     _, total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted = \
-        build_attention_model(params, src_vocab, trg_vocab, source_ids,
-                              source_seq_length, target_ids,
-                              target_seq_length, mode=mode,
+        build_attention_model(params, src_vocab, trg_vocab, 
+                              source_placeholders,
+                              target_placeholders,
+                              mode=mode,
                               burn_in_step=burn_in_step,
                               increment_step=increment_step,
                               max_step=max_step)
@@ -64,9 +78,10 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
     # attention model for evaluating
     with tf.variable_scope(tf.get_variable_scope(), reuse=True):
         decoder_output_eval, _ = \
-            build_attention_model(params, src_vocab, trg_vocab, source_ids,
-                                  source_seq_length, target_ids,
-                                  target_seq_length, mode=MODE.EVAL,
+            build_attention_model(params, src_vocab, trg_vocab,
+                                  source_placeholders,
+                                  target_placeholders,
+                                  mode=MODE.EVAL,
                                   max_step=max_step)
 
     # optimizer
@@ -94,7 +109,7 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
     # GPU config
     config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
+    config.gpu_options.allow_growth = False
 
     # ------------------------------------
     # training
@@ -119,15 +134,18 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
         # start training
         start_time = time.time()
         for step in range(1, train_steps):
-            src_np, src_len_np, trg_np, trg_len_np = next(
-                parallel_data_generator)
+            current_input = next(parallel_data_generator)
+            current_input_dict = current_input._asdict()
+            feed_dict = {}
+            for key in source_placeholders.keys():
+                feed_dict[source_placeholders[key]] = current_input_dict[key]
+            for key in target_placeholders.keys():
+                feed_dict[target_placeholders[key]] = current_input_dict[key]
+
             _, total_loss_avg_np, summary, reward_predicted_np, global_step = \
                 sess.run([train_op, total_loss_avg, summary_merged,
                           reward_predicted, global_step_tensor],
-                         feed_dict={source_ids: src_np,
-                                    source_seq_length: src_len_np,
-                                    target_ids: trg_np,
-                                    target_seq_length: trg_len_np})
+                         feed_dict=feed_dict)
             train_writer.add_summary(summary, global_step)
 
             if step % check_every_step == 0:
@@ -143,20 +161,17 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                 saver.save(sess, model_path, global_step=global_step)
                 predicted_ids_np = \
                     sess.run(decoder_output_eval.predicted_ids,
-                             feed_dict={source_ids: src_np,
-                                        source_seq_length: src_len_np,
-                                        target_ids: trg_np,
-                                        target_seq_length: trg_len_np})
+                             feed_dict=feed_dict)
 
                 # print eval results
                 for i in range(10):
                     pids = predicted_ids_np[:, i].tolist()
                     if TIME_MAJOR:
-                        sids = src_np[:, i].tolist()
-                        tids = trg_np[:, i].tolist()
+                        sids = current_input_dict['src'][:, i].tolist()
+                        tids = current_input_dict['trg'][:, i].tolist()
                     else:
-                        sids = src_np[i, :].tolist()
-                        tids = trg_np[i, :].tolist()
+                        sids = current_input_dict['src'][i, :].tolist()
+                        tids = current_input_dict['trg'][i, :].tolist()
                     print('src:', src_vocab.id_to_token(sids))
                     print('prd:', trg_vocab.id_to_token(pids))
                     print('trg:', trg_vocab.id_to_token(tids))

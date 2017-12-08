@@ -61,6 +61,7 @@ class FeedBack(metaclass=ABCMeta):
         self.name = name
         self.bos_id = vocab.bos_id
         self.vocab_size = vocab.vocab_size
+        self.embedding_dim = vocab.embedding_dim
         self.eos_id = vocab.eos_id
 
     @abstractmethod

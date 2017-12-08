@@ -10,41 +10,15 @@ import json
 import numpy
 import sequencing as sq
 import tensorflow as tf
-from sequencing import TIME_MAJOR, MODE
+from sequencing import TIME_MAJOR, MODE, LinearOp
 from sequencing.utils.metrics import Delta_BLEU
-
-
-def optimistic_restore(session, save_file):
-    """
-    Only load matched variables. For example, Adam may not be saved and not
-    necessary to load.
-
-    :param session:
-    :param save_file: file path of the checkpoint.
-    :return:
-    """
-    reader = tf.train.NewCheckpointReader(save_file)
-    saved_shapes = reader.get_variable_to_shape_map()
-    var_names = sorted(
-        [(var.name, var.name.split(':')[0]) for var in tf.global_variables()
-         if var.name.split(':')[0] in saved_shapes])
-    restore_vars = []
-    name2var = dict(
-        zip(map(lambda x: x.name.split(':')[0], tf.global_variables()),
-            tf.global_variables()))
-    with tf.variable_scope('', reuse=True):
-        for var_name, saved_var_name in var_names:
-            curr_var = name2var[saved_var_name]
-            var_shape = curr_var.get_shape().as_list()
-            if var_shape == saved_shapes[saved_var_name]:
-                restore_vars.append(curr_var)
-    saver = tf.train.Saver(restore_vars)
-    saver.restore(session, save_file)
+from sequencing.utils.misc import get_rnn_cell, EncoderDecoderBridge
 
 
 def cross_entropy_sequence_loss(logits, targets, sequence_length):
     with tf.name_scope('cross_entropy_sequence_loss'):
         total_length = tf.to_float(tf.reduce_sum(sequence_length))
+        batch_size = tf.to_float(tf.shape(sequence_length)[0])
 
         entropy_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
             logits=logits, labels=targets)
@@ -57,7 +31,7 @@ def cross_entropy_sequence_loss(logits, targets, sequence_length):
         losses = entropy_losses * loss_mask
         # losses.shape: T * B
         # sequence_length: B
-        total_loss_avg = tf.reduce_sum(losses) / total_length
+        total_loss_avg = tf.reduce_sum(losses) / batch_size 
 
         return total_loss_avg
 
@@ -168,8 +142,8 @@ def _py_func(predict_target_ids, ground_truth_ids, eos_id):
     return reward, length
 
 
-def build_attention_model(params, src_vocab, trg_vocab, source_ids,
-                          source_seq_length, target_ids, target_seq_length,
+def build_attention_model(params, src_vocab, trg_vocab,
+                          source_placeholders, target_placeholders,
                           beam_size=1, mode=MODE.TRAIN,
                           burn_in_step=100000, increment_step=10000,
                           teacher_rate=1.0, max_step=100):
@@ -212,20 +186,52 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
     # parameters
     encoder_params = params['encoder']
     decoder_params = params['decoder']
+    source_ids = source_placeholders['src']
+    source_seq_length = source_placeholders['src_len']
+    source_sample_matrix = source_placeholders['src_sample_matrix']
+    source_word_seq_length = source_placeholders['src_word_len']
+
+    target_ids = target_placeholders['trg']
+    target_seq_length = target_placeholders['trg_len']
 
     # Because source encoder is different to the target feedback,
     # we construct source_embedding_table manually
-    source_embedding_table = sq.LookUpOp(src_vocab.vocab_size,
+    source_char_embedding_table = sq.LookUpOp(src_vocab.vocab_size,
                                          src_vocab.embedding_dim,
                                          name='source')
-    source_embedded = source_embedding_table(source_ids)
+    source_char_embedded = source_char_embedding_table(source_ids)
+    # encode char to word
+    char_rnn_cell = tf.nn.rnn_cell.MultiRNNCell(get_rnn_cell(encoder_params['char_rnn_cell']))
+
+    # char_encoder_outputs: T_c B F
+    char_encoder_outputs, _ = tf.nn.dynamic_rnn(char_rnn_cell, 
+                                                source_char_embedded,
+                                                source_seq_length,
+                                                scope='char_rnn', 
+                                                time_major=TIME_MAJOR, 
+                                                swap_memory=True,
+                                                dtype=tf.float32)
+    #dynamical_batch_size = tf.shape(char_encoder_outputs)[1]
+    #space_indices = tf.where(tf.equal(tf.transpose(source_ids), src_vocab.space_id))
+    ##space_indices = tf.transpose(tf.gather_nd(tf.transpose(space_indices), [[1], [0]]))
+    #space_indices = tf.concat(tf.split(space_indices, 2, axis=1)[::-1], axis=1)
+    #space_indices = tf.transpose(tf.reshape(space_indices, [dynamical_batch_size, -1, 2]),
+    #                             [1, 0, 2])
+    ## T_w * B * F
+    #source_embedded = tf.gather_nd(char_encoder_outputs, space_indices)
+
+    # must be time major
+    char_encoder_outputs = tf.transpose(char_encoder_outputs, perm=(1, 0, 2))
+    sampled_word_embedded = tf.matmul(source_sample_matrix, char_encoder_outputs)
+    source_embedded = tf.transpose(sampled_word_embedded, perm=(1, 0, 2))
 
     encoder = sq.StackBidirectionalRNNEncoder(encoder_params, name='stack_rnn',
                                               mode=mode)
-    encoded_representation = encoder.encode(source_embedded, source_seq_length)
+    encoded_representation = encoder.encode(source_embedded, source_word_seq_length)
     attention_keys = encoded_representation.attention_keys
     attention_values = encoded_representation.attention_values
     attention_length = encoded_representation.attention_length
+    encoder_final_states_bw = encoded_representation.final_state[-1][-1].h
 
     # feedback
     if mode == MODE.RL:
@@ -237,6 +243,7 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
                                          increment_step=increment_step,
                                          max_step=max_step)
     elif mode == MODE.TRAIN:
+
         tf.logging.info('BUILDING TRAIN FEEDBACK WITH {} TEACHER_RATE'
                         '......'.format(teacher_rate))
         feedback = sq.TrainingFeedBack(target_ids, target_seq_length,
@@ -252,6 +259,10 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
                         '......'.format(beam_size))
         infer_key_size = attention_keys.get_shape().as_list()[-1]
         infer_value_size = attention_values.get_shape().as_list()[-1]
+        infer_states_bw_shape = encoder_final_states_bw.get_shape().as_list()[-1]
+        
+        encoder_final_states_bw = tf.reshape(tf.tile(encoder_final_states_bw, [1, beam_size]),
+                                  [-1, infer_states_bw_shape])
 
         # expand beam
         if TIME_MAJOR:
@@ -283,25 +294,34 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
 
         feedback = sq.BeamFeedBack(trg_vocab, beam_size, dynamical_batch_size,
                                    max_step=max_step)
-
+    
+    encoder_decoder_bridge = EncoderDecoderBridge(encoder_final_states_bw.get_shape().as_list()[-1],
+                                              decoder_params['rnn_cell'])
     decoder_state_size = decoder_params['rnn_cell']['state_size']
     context_size = attention_values.get_shape().as_list()[-1]
-
     # attention
     attention = sq.Attention(decoder_state_size,
                              attention_keys, attention_values, attention_length)
 
     with tf.variable_scope('logits_func'):
-        attention_mix = LinearOp(context_size + feedback.embedding_dim + decoder_state_size,
-                                 decoder_state_size , name='attention_mix')
-        logits_trans = LinearOp(decoder_state_size, feedback.vocab_size,
-                                  name='logits_trans')
+        attention_mix = LinearOp(
+                    context_size + feedback.embedding_dim + decoder_state_size,
+                    decoder_state_size , name='attention_mix')
+        attention_mix_middle = LinearOp(
+                    decoder_state_size, decoder_state_size // 2, 
+                    name='attention_mix_middle')
+        logits_trans = LinearOp(decoder_state_size // 2, feedback.vocab_size,
+                                name='logits_trans')
         logits_func = lambda _softmax: logits_trans(
-                                       tf.nn.tanh(attention_mix(_softmax)))
+                                        tf.nn.relu(attention_mix_middle(
+                                        tf.nn.relu(attention_mix(_softmax)))))
 
     # decoder
     decoder = sq.AttentionRNNDecoder(decoder_params, attention,
-                                     feedback, logits_func=logits_func, mode=mode)
+                                     feedback, 
+                                     logits_func=logits_func,
+                                     init_state=encoder_decoder_bridge(encoder_final_states_bw),
+                                     mode=mode)
     decoder_output, decoder_final_state = sq.dynamic_decode(decoder,
                                                             swap_memory=True,
                                                             scope='decoder')
@@ -309,6 +329,7 @@ def build_attention_model(params, src_vocab, trg_vocab, source_ids,
     # not training
     if mode == MODE.EVAL or mode == MODE.INFER:
         return decoder_output, decoder_final_state
+
 
     # bos is added in feedback
     # so target_ids is predict_ids

@@ -103,3 +103,6 @@ ENV/
 .*
 useless
 model*
+
+data
+config.py
