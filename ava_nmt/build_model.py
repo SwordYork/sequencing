@@ -141,7 +141,6 @@ def _py_func(predict_target_ids, ground_truth_ids, eos_id):
 
     return reward, length
 
-
 def build_attention_model(params, src_vocab, trg_vocab,
                           source_placeholders, target_placeholders,
                           beam_size=1, mode=MODE.TRAIN,
@@ -223,6 +222,10 @@ def build_attention_model(params, src_vocab, trg_vocab,
     sampled_word_embedded = tf.matmul(source_sample_matrix, char_encoder_outputs)
     source_embedded = tf.transpose(sampled_word_embedded, perm=(1, 0, 2))
 
+    char_attention_keys = char_encoded_representation.attention_keys
+    char_attention_values = char_encoded_representation.attention_values
+    char_attention_length = char_encoded_representation.attention_length
+
     encoder = sq.StackBidirectionalRNNEncoder(params['encoder'],
                                               params['attention_key_size']['word'],
                                               name='stack_rnn',
@@ -260,7 +263,10 @@ def build_attention_model(params, src_vocab, trg_vocab,
         infer_key_size = attention_keys.get_shape().as_list()[-1]
         infer_value_size = attention_values.get_shape().as_list()[-1]
         infer_states_bw_shape = encoder_final_states_bw.get_shape().as_list()[-1]
-        
+
+        infer_char_key_size = char_attention_keys.get_shape().as_list()[-1]
+        infer_char_value_size = char_attention_values.get_shape().as_list()[-1]
+
         encoder_final_states_bw = tf.reshape(tf.tile(encoder_final_states_bw, [1, beam_size]),
                                   [-1, infer_states_bw_shape])
 
@@ -277,20 +283,45 @@ def build_attention_model(params, src_vocab, trg_vocab,
             attention_values = tf.reshape(
                 (tf.tile(attention_values, [1, 1, beam_size])),
                 final_value_shape)
+
+            final_char_key_shape = [-1, dynamical_batch_size * beam_size,
+                                    infer_char_key_size]
+            final_char_value_shape = [-1, dynamical_batch_size * beam_size,
+                                      infer_char_value_size]
+            char_attention_keys = tf.reshape(
+                (tf.tile(char_attention_keys, [1, 1, beam_size])), final_char_key_shape)
+            char_attention_values = tf.reshape(
+                (tf.tile(char_attention_values, [1, 1, beam_size])),
+                final_char_value_shape)
+
         else:
             dynamical_batch_size = tf.shape(attention_keys)[0]
             final_key_shape = [dynamical_batch_size * beam_size, -1,
                                infer_key_size]
             final_value_shape = [dynamical_batch_size * beam_size, -1,
                                  infer_value_size]
+            final_char_key_shape = [dynamical_batch_size * beam_size, -1,
+                               infer_char_key_size]
+            final_char_value_shape = [dynamical_batch_size * beam_size, -1,
+                                 infer_char_value_size]
+
             attention_keys = tf.reshape(
                 (tf.tile(attention_keys, [1, beam_size, 1])), final_key_shape)
             attention_values = tf.reshape(
                 (tf.tile(attention_values, [1, beam_size, 1])),
                 final_value_shape)
 
+            char_attention_keys = tf.reshape(
+                (tf.tile(char_attention_keys, [1, beam_size, 1])), final_char_key_shape)
+            char_attention_values = tf.reshape(
+                (tf.tile(char_attention_values, [1, beam_size, 1])),
+                final_char_value_shape)
+
+
         attention_length = tf.reshape(
             tf.transpose(tf.tile([attention_length], [beam_size, 1])), [-1])
+        char_attention_length = tf.reshape(
+            tf.transpose(tf.tile([char_attention_length], [beam_size, 1])), [-1])
 
         feedback = sq.BeamFeedBack(trg_vocab, beam_size, dynamical_batch_size,
                                    max_step=max_step)
@@ -299,8 +330,9 @@ def build_attention_model(params, src_vocab, trg_vocab,
                                               decoder_params['rnn_cell'])
     decoder_state_size = decoder_params['rnn_cell']['state_size']
     # attention
-    attention = sq.Attention(decoder_state_size,
-                             attention_keys, attention_values, attention_length)
+    attention = sq.AvAttention(decoder_state_size,
+                             attention_keys, attention_values, attention_length,
+                             char_attention_keys, char_attention_values, char_attention_length)
     context_size = attention.context_size
 
     with tf.variable_scope('logits_func'):
@@ -380,4 +412,5 @@ def build_attention_model(params, src_vocab, trg_vocab,
             sequence_length=target_seq_length)
         return decoder_output, total_loss_avg, total_loss_avg, \
                tf.to_float(0.), tf.to_float(0.)
+
 

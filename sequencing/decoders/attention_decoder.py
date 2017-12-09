@@ -37,7 +37,7 @@ class AttentionRNNDecoder(Decoder):
         self.embedding_dim = feedback.embedding_dim
 
         self.attention = attention
-        self.context_size = self.attention.values.get_shape().as_list()[-1]
+        self.context_size = self.attention.context_size
         self.rnn_init = init_state
         self.feedback = feedback
         self.cell = tf.nn.rnn_cell.MultiRNNCell(get_rnn_cell(self.params[

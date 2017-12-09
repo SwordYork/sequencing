@@ -20,7 +20,7 @@ from sequencing import MODE, TIME_MAJOR, optimistic_restore
 
 def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
           params, batch_size=1, max_step=300, train_steps=200000,
-          lr_rate=0.0005, clip_gradient_norm=5., check_every_step=500,
+          lr_rate=0.0005, clip_gradient_norm=5., check_every_step=100,
           model_dir='models/', burn_in_step=500, increment_step=1000,
           mode=MODE.TRAIN):
     # ------------------------------------
@@ -45,8 +45,6 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                                        name='source_seq_length')
     source_sample_matrix = tf.placeholder(tf.float32, shape=(None, None, None),
                                        name='source_sample_matrix')
-    source_word_seq_length = tf.placeholder(tf.int32, shape=(None,),
-                                       name='source_word_seq_length')
 
     target_ids = tf.placeholder(tf.int32, shape=(None, None),
                                 name='target_ids')
@@ -55,8 +53,7 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
     source_placeholders = {'src': source_ids,
                           'src_len': source_seq_length,
-                          'src_sample_matrix':source_sample_matrix,
-                          'src_word_len': source_word_seq_length}
+                          'src_sample_matrix': source_sample_matrix}
     target_placeholders = {'trg': target_ids,
                           'trg_len': target_seq_length}
 
@@ -66,7 +63,7 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
     global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
 
     # attention model for training
-    _, total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted = \
+    tmp = \
         build_attention_model(params, src_vocab, trg_vocab, 
                               source_placeholders,
                               target_placeholders,
@@ -75,41 +72,9 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                               increment_step=increment_step,
                               max_step=max_step)
 
-    # attention model for evaluating
-    with tf.variable_scope(tf.get_variable_scope(), reuse=True):
-        decoder_output_eval, _ = \
-            build_attention_model(params, src_vocab, trg_vocab,
-                                  source_placeholders,
-                                  target_placeholders,
-                                  mode=MODE.EVAL,
-                                  max_step=max_step)
-
-    # optimizer
-    optimizer = tf.train.AdamOptimizer(lr_rate)
-
-    gradients, variables = zip(*optimizer.compute_gradients(total_loss_avg))
-    gradients_norm = tf.global_norm(gradients)
-
-    gradients, _ = tf.clip_by_global_norm(gradients, clip_gradient_norm,
-                                          use_norm=gradients_norm)
-    train_op = optimizer.apply_gradients(zip(gradients, variables),
-                                         global_step=global_step_tensor)
-
-    # record loss curve
-    tf.summary.scalar('total_loss', total_loss_avg)
-    tf.summary.scalar('entropy_loss_avg', entropy_loss_avg)
-    tf.summary.scalar('reward_predicted', reward_predicted)
-    tf.summary.scalar('reward_loss_rmse', reward_loss_rmse)
-    tf.summary.scalar('gradients_norm', gradients_norm)
-
-    # Create a saver object which will save all the variables
-    saver_var_list = tf.trainable_variables()
-    saver_var_list.append(global_step_tensor)
-    saver = tf.train.Saver(var_list=saver_var_list, max_to_keep=3)
-
     # GPU config
     config = tf.ConfigProto()
-    config.gpu_options.allow_growth = False
+    config.gpu_options.allow_growth = True
 
     # ------------------------------------
     # training
@@ -120,14 +85,6 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
         init = tf.global_variables_initializer()
         sess.run(init)
 
-        model_path = os.path.join(model_dir, 'model.ckpt')
-        last_ckpt = tf.train.latest_checkpoint(model_dir)
-
-        # Merge all the summaries and write them out
-        summary_merged = tf.summary.merge_all()
-        train_writer = tf.summary.FileWriter(model_dir + '/train', sess.graph)
-        if last_ckpt:
-            optimistic_restore(sess, last_ckpt)
 
         tf.logging.info('Train model ...')
 
@@ -142,43 +99,10 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
             for key in target_placeholders.keys():
                 feed_dict[target_placeholders[key]] = current_input_dict[key]
 
-            _, total_loss_avg_np, summary, reward_predicted_np, global_step = \
-                sess.run([train_op, total_loss_avg, summary_merged,
-                          reward_predicted, global_step_tensor],
+            tmp_np, global_step = \
+                sess.run([tmp, global_step_tensor],
                          feed_dict=feed_dict)
-            train_writer.add_summary(summary, global_step)
-
-            if step % check_every_step == 0:
-                tf.logging.info('start_time: {}, {} steps / sec'.format(
-                    datetime.fromtimestamp(start_time).strftime('%Y-%m-%d '
-                                                                '%H:%M:%S'),
-                    check_every_step / (time.time() - start_time)))
-                tf.logging.info(
-                    'global_step: {}, step: {}, total_loss: {}'.format(
-                        global_step, step, total_loss_avg_np))
-                start_time = time.time()
-
-                saver.save(sess, model_path, global_step=global_step)
-                predicted_ids_np = \
-                    sess.run(decoder_output_eval.predicted_ids,
-                             feed_dict=feed_dict)
-
-                # print eval results
-                for i in range(10):
-                    pids = predicted_ids_np[:, i].tolist()
-                    if TIME_MAJOR:
-                        sids = current_input_dict['src'][:, i].tolist()
-                        tids = current_input_dict['trg'][:, i].tolist()
-                    else:
-                        sids = current_input_dict['src'][i, :].tolist()
-                        tids = current_input_dict['trg'][i, :].tolist()
-                    print('src:', src_vocab.id_to_token(sids))
-                    print('prd:', trg_vocab.id_to_token(pids))
-                    print('trg:', trg_vocab.id_to_token(tids))
-                    print('---------------------------------')
-                print('---------------------------------')
-                print('---------------------------------')
-                print('\n')
+            print(global_step, tmp_np.shape)
 
 
 if __name__ == '__main__':

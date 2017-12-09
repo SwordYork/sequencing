@@ -17,6 +17,8 @@ class Attention(object):
     def __init__(self, query_size, keys, values, values_length,
                  name='attention'):
         self.attention_size = keys.get_shape().as_list()[-1]
+        self.context_size = values.get_shape().as_list()[-1]
+
         self.keys = keys
         self.values = values
         self.values_length = values_length
@@ -25,6 +27,9 @@ class Attention(object):
         with tf.variable_scope(name):
             self.v_att = tf.get_variable('v_att', shape=[self.attention_size],
                                          dtype=DTYPE)
+            self.b_att = tf.get_variable('b_att', shape=[self.attention_size],
+                                         dtype=DTYPE)
+
 
         self.time_axis = 0 if TIME_MAJOR else 1
 
@@ -43,7 +48,7 @@ class Attention(object):
     def compute_scores(self, query):
         att_query = self.query_trans(query)
 
-        energies = tf.reduce_sum(self.v_att * tf.tanh(
+        energies = tf.reduce_sum(self.b_att + self.v_att * tf.tanh(
             self.keys + tf.expand_dims(att_query, self.time_axis)), [2])
 
         # TODO: we should mask energies before stabilize

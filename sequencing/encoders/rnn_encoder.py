@@ -111,25 +111,71 @@ def stack_bidirectional_dynamic_rnn(cells_fw,
     return prev_layer, tuple(states_fw), tuple(states_bw)
 
 
+class StackRNNEncoder(Encoder):
+    """Stacked Bidirectional RNN Encoder"""
+
+    def __init__(self, params, attention_key_size, mode=MODE.TRAIN, name=None):
+        super(StackRNNEncoder, self).__init__(params, mode)
+        self.name = name
+        self.params = merge_dict(self._default_params(), params)
+        self.attention_key_size = attention_key_size
+
+    def _default_params(self):
+        return {'cell_name': 'GRUCell',
+                'state_size': 64,
+                'num_layers': 2,
+                'input_keep_prob': 1.0,
+                'output_keep_prob': 1.0}
+
+    def encode(self, inputs, sequence_length, **kwargs):
+        cells = tf.nn.rnn_cell.MultiRNNCell(get_rnn_cell(self.params))
+
+        # char_encoder_outputs: T_c B F
+        outputs, states = tf.nn.dynamic_rnn(cells,
+                                            inputs,
+                                            sequence_length,
+                                            scope=self.name,
+                                            time_major=self.time_major,
+                                            swap_memory=True,
+                                            dtype=DTYPE,
+                                            **kwargs)
+
+        if self.attention_key_size > 0:
+            attention_keys = \
+                tf.contrib.layers.fully_connected(outputs,
+                                                  self.attention_key_size,
+                                                  activation_fn=None,
+                                                  scope=self.name)
+        else:
+            attention_keys = outputs
+
+        return EncoderOutput(
+            outputs=outputs,
+            final_state=states,
+            attention_values=outputs,
+            attention_keys=attention_keys,
+            attention_length=sequence_length)
+
+
 class StackBidirectionalRNNEncoder(Encoder):
     """Stacked Bidirectional RNN Encoder"""
 
-    def __init__(self, params, mode=MODE.TRAIN, name=None):
+    def __init__(self, params, attention_key_size, mode=MODE.TRAIN, name=None):
         super(StackBidirectionalRNNEncoder, self).__init__(params, mode)
         self.name = name
         self.params = merge_dict(self._default_params(), params)
+        self.attention_key_size = attention_key_size
 
     def _default_params(self):
-        return {'rnn_cell': {'cell_name': 'GRUCell',
-                             'state_size': 64,
-                             'num_layers': 2,
-                             'input_keep_prob': 1.0,
-                             'output_keep_prob': 1.0},
-                'attention_key_size': 64}
+        return {'cell_name': 'GRUCell',
+                'state_size': 64,
+                'num_layers': 2,
+                'input_keep_prob': 1.0,
+                'output_keep_prob': 1.0}
 
     def encode(self, inputs, sequence_length, **kwargs):
-        cells_fw = get_rnn_cell(self.params['rnn_cell'])
-        cells_bw = get_rnn_cell(self.params['rnn_cell'])
+        cells_fw = get_rnn_cell(self.params)
+        cells_bw = get_rnn_cell(self.params)
 
         outputs, states_fw, states_bw = stack_bidirectional_dynamic_rnn(
             cells_fw=cells_fw,
@@ -142,11 +188,14 @@ class StackBidirectionalRNNEncoder(Encoder):
             swap_memory=True,
             **kwargs)
 
-        attention_keys = \
-            tf.contrib.layers.fully_connected(outputs,
-                                              self.params['attention_key_size'],
-                                              activation_fn=None,
-                                              scope=self.name)
+        if self.attention_key_size > 0:
+            attention_keys = \
+                tf.contrib.layers.fully_connected(outputs,
+                                                  self.attention_key_size,
+                                                  activation_fn=None,
+                                                  scope=self.name)
+        else:
+            attention_keys = outputs
 
         return EncoderOutput(
             outputs=outputs,
@@ -154,3 +203,4 @@ class StackBidirectionalRNNEncoder(Encoder):
             attention_values=outputs,
             attention_keys=attention_keys,
             attention_length=sequence_length)
+
