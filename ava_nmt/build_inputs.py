@@ -15,6 +15,102 @@ import tensorflow as tf
 import sequencing as sq
 from sequencing import MODE, TIME_MAJOR
 
+def build_source_char_inputs(src_vocab, src_data_file,
+                               batch_size, buffer_size=16,
+                               mode=MODE.TRAIN):
+    # data file should be preprocessed. For example, tokenize and remove long
+    # lines.
+
+    input_tuple = namedtuple('inputs',
+                             ['src', 'src_len',
+                              'src_sample_matrix','src_word_len'])
+
+    def _source_generator():
+        read_buffer = deque(maxlen=buffer_size)
+        should_stop_read = False
+
+
+        with open(src_data_file, 'r') as src_data:
+            while True:
+                if not read_buffer and should_stop_read:
+                    break
+
+                if not read_buffer:
+                    # read_buffer is empty
+                    # we read a lot of sentences to read_buffer for sorting and
+                    # caching
+                    buffer_batch = []
+                    for _ in range(buffer_size * batch_size):
+                        s = src_data.readline()
+                        if not s:
+                            should_stop_read = True
+                            break
+
+                        # impossible for s, t to be None
+                        src_char_ids = src_vocab.string_to_ids(s)[:-1] \
+                                       + [src_vocab.space_id, src_vocab.eos_id, src_vocab.space_id]
+
+                        buffer_batch.append((src_char_ids,))
+
+                    total_batches = len(buffer_batch) // batch_size
+
+                    # smaller batch
+                    if len(buffer_batch) % batch_size > 0:
+                        total_batches += 1
+
+                    for i in range(total_batches):
+                        if i == (total_batches - 1):
+                            # take all in last
+                            lines = buffer_batch[i * batch_size:]
+                        else:
+                            lines = buffer_batch[
+                                    i * batch_size:(i + 1) * batch_size]
+
+                        num_lines = len(lines)
+                        src_word_len_np = numpy.asarray([l[0].count(src_vocab.space_id) for l in lines],
+                                                     dtype=numpy.int32)
+                        max_word_length = src_word_len_np.max()
+
+                        src_len_np = numpy.asarray([len(l[0]) + max_word_length - src_word_len_np[li]
+                                                    for li, l in enumerate(lines)],
+                                                    dtype=numpy.int32)
+
+                        src_sample_matrix_np = numpy.zeros((num_lines, max_word_length, 
+                                                            src_len_np.max()),
+                                                          dtype=numpy.float32)
+
+                        if TIME_MAJOR:
+                            # fill with eos
+                            src_np = numpy.full((src_len_np.max(), num_lines),
+                                                src_vocab.eos_id,
+                                                dtype=numpy.int32)
+                            for idx, l in enumerate(lines):
+                                src_np[:len(l[0]), idx] = l[0]
+                                src_np[len(l[0]):src_len_np[idx], idx] = src_vocab.space_id
+                                src_sample_matrix_np[idx, range(max_word_length),
+                                        numpy.where(src_np[:, idx] == src_vocab.space_id)[0]] = 1.
+                        else:
+                            # fill with eos
+                            src_np = numpy.full((num_lines, src_len_np.max()),
+                                                src_vocab.eos_id,
+                                                dtype=numpy.int32)
+                            for idx, l in enumerate(lines):
+                                src_np[idx, :len(l[0])] = l[0]
+                                src_np[idx, len(l[0]):src_len_np[idx]] = src_vocab.space_id
+                                src_sample_matrix_np[idx, range(max_word_length),
+                                        numpy.where(src_np[:, idx] == src_vocab.space_id)[0]] = 1.
+
+                        current_input_np = input_tuple(
+                                src=src_np,
+                                src_len=src_len_np,
+                                src_sample_matrix=src_sample_matrix_np,
+                                src_word_len=src_word_len_np)
+                        read_buffer.appendleft(current_input_np)
+
+                yield read_buffer.pop()
+
+    return _source_generator()
+
 
 def build_parallel_char_inputs(src_vocab, trg_vocab, src_data_file,
                                trg_data_file, batch_size, buffer_size=16,

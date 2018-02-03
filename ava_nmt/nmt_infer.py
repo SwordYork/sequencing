@@ -6,19 +6,25 @@
 #   No rights reserved.
 #
 import argparse
+import os
+from shutil import copyfile
 
 import numpy
 import tensorflow as tf
 
 import config
-from build_inputs import build_parallel_inputs
-from build_model import build_attention_model, optimistic_restore
-from sequencing import MODE
+from build_inputs import build_source_char_inputs
+from build_model import build_attention_model
+from sequencing import TIME_MAJOR, MODE, optimistic_restore
 
-
-def infer(src_vocab, src_data_file, trg_vocab, trg_data_file,
+def infer(src_vocab, src_data_file, trg_vocab,
           params, beam_size=1, batch_size=1, max_step=100,
           output_file='test.out', model_dir='models/'):
+
+    save_output_dir = 'dev_outputs/'
+    if not os.path.exists(save_output_dir):
+        os.makedirs(save_output_dir)
+
     # ------------------------------------
     # prepare data
     # trg_data_file may be empty.
@@ -26,10 +32,9 @@ def infer(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
     # load parallel data
     parallel_data_generator = \
-        build_parallel_inputs(src_vocab, trg_vocab,
-                              src_data_file, trg_data_file,
-                              batch_size=batch_size, buffer_size=96,
-                              mode=MODE.INFER)
+        build_source_char_inputs(src_vocab, src_data_file,
+                                batch_size=batch_size, buffer_size=96,
+                                mode=MODE.INFER)
 
     # ------------------------------------
     # build model
@@ -40,15 +45,26 @@ def infer(src_vocab, src_data_file, trg_vocab, trg_data_file,
                                 name='source_ids')
     source_seq_length = tf.placeholder(tf.int32, shape=(None,),
                                        name='source_seq_length')
+    source_sample_matrix = tf.placeholder(tf.float32, shape=(None, None, None),
+                                       name='source_sample_matrix')
+    source_word_seq_length = tf.placeholder(tf.int32, shape=(None,),
+                                       name='source_word_seq_length')
 
-    target_ids = tf.placeholder(tf.int32, shape=(None, None),
-                                name='target_ids')
-    target_seq_length = tf.placeholder(tf.int32, shape=(None,),
-                                       name='target_seq_length')
+    target_ids = None
+    target_seq_length = None
+
+    source_placeholders = {'src': source_ids,
+                          'src_len': source_seq_length,
+                          'src_sample_matrix':source_sample_matrix,
+                          'src_word_len': source_word_seq_length}
+    target_placeholders = {'trg': target_ids,
+                          'trg_len': target_seq_length}
+
 
     decoder_output_eval, decoder_final_state = \
-        build_attention_model(params, src_vocab, trg_vocab, source_ids,
-                              source_seq_length, target_ids, target_seq_length,
+        build_attention_model(params, src_vocab, trg_vocab,
+                              source_placeholders,
+                              target_placeholders,
                               beam_size=beam_size, mode=MODE.INFER,
                               max_step=max_step)
 
@@ -62,20 +78,25 @@ def infer(src_vocab, src_data_file, trg_vocab, trg_data_file,
         else:
             raise Exception('No checkpoint found ...')
 
-        output_ = open(output_file, 'w')
-        for step, curr_data in enumerate(parallel_data_generator):
-            src_np, src_len_np, trg_np, trg_len_np = curr_data
+        output_file_name = os.path.join(save_output_dir,
+                                output_file + last_ckpt.split('-')[-1])
+        output_ = open(output_file_name, 'w')
+
+        for step, current_input in enumerate(parallel_data_generator):
+            current_input_dict = current_input._asdict()
+            feed_dict = {}
+            for key in source_placeholders.keys():
+                feed_dict[source_placeholders[key]] = current_input_dict[key]
+
             # beam_ids_np: [seq_len, beam_size]
             # predicted_ids_np: [seq_len, beam_size]
             predicted_ids_np, beam_ids_np, log_probs_np = sess.run(
                 [decoder_output_eval.predicted_ids,
                  decoder_output_eval.beam_ids,
                  decoder_final_state.log_probs],
-                feed_dict={source_ids: src_np,
-                           source_seq_length: src_len_np,
-                           target_ids: trg_np,
-                           target_seq_length: trg_len_np})
-
+                feed_dict=feed_dict)
+            
+            src_len_np = current_input_dict['src_len']
             data_batch_size = len(src_len_np)
 
             gathered_pred_ids = numpy.zeros_like(beam_ids_np)
@@ -101,10 +122,18 @@ def infer(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
             for b in range(data_batch_size):
                 p = trg_vocab.id_to_token(pids[:, b].tolist())
-                tf.logging.info(p)
+                if TIME_MAJOR:
+                    s = src_vocab.id_to_token(current_input_dict['src'][:, b].tolist())
+                else:
+                    s = src_vocab.id_to_token(current_input_dict['src'][b, :].tolist())
+                print('src:', s)
+                print('prd:', p)
+                print('---------------------------')
+                print('\n')
                 output_.write(p + '\n')
             output_.flush()
         output_.close()
+        copyfile(output_file_name, output_file)
 
 
 if __name__ == '__main__':
@@ -119,8 +148,6 @@ if __name__ == '__main__':
                         required=True)
     parser.add_argument('--test-src', type=str,
                         help='test src file')
-    parser.add_argument('--test-trg', type=str,
-                        help='test trg file')
     parser.add_argument('--output-file', type=str,
                         help='test output file',
                         default='test.out')
@@ -130,17 +157,10 @@ if __name__ == '__main__':
 
     test_src_file = args.test_src if args.test_src else training_configs.test_src_file
 
-    if args.test_src and not args.test_trg:
-        test_trg_file = args.test_src
-    elif args.test_src and args.test_trg:
-        test_trg_file = args.test_trg
-    else:
-        test_trg_file = training_configs.test_trg_file
-
     output_file = args.output_file
 
     infer(training_configs.src_vocab, test_src_file,
-          training_configs.trg_vocab, test_trg_file,
+          training_configs.trg_vocab,
           training_configs.params,
           beam_size=training_configs.beam_size,
           batch_size=training_configs.batch_size,

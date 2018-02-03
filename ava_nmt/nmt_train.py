@@ -9,6 +9,7 @@ import argparse
 import os
 import time
 from datetime import datetime
+import numpy
 
 import tensorflow as tf
 
@@ -85,7 +86,7 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                                   max_step=max_step)
 
     # optimizer
-    optimizer = tf.train.AdamOptimizer(lr_rate)
+    optimizer = tf.train.GradientDescentOptimizer(0.001)
 
     gradients, variables = zip(*optimizer.compute_gradients(total_loss_avg))
     gradients_norm = tf.global_norm(gradients)
@@ -142,11 +143,15 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
             for key in target_placeholders.keys():
                 feed_dict[target_placeholders[key]] = current_input_dict[key]
 
-            _, total_loss_avg_np, summary, reward_predicted_np, global_step = \
-                sess.run([train_op, total_loss_avg, summary_merged,
+            _, total_loss_avg_np, summary, gradients_norm_np, gradients_np, reward_predicted_np, global_step = \
+                sess.run([train_op, total_loss_avg, summary_merged, gradients_norm, gradients,
                           reward_predicted, global_step_tensor],
                          feed_dict=feed_dict)
             train_writer.add_summary(summary, global_step)
+            
+            if numpy.isnan(gradients_norm_np):
+                print(gradients_norm_np, gradients_np)
+                break
 
             if step % check_every_step == 0:
                 tf.logging.info('start_time: {}, {} steps / sec'.format(
