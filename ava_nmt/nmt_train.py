@@ -13,7 +13,7 @@ import numpy
 
 import tensorflow as tf
 
-import config
+import config_example
 from build_inputs import build_parallel_char_inputs
 from build_model import build_attention_model
 from sequencing import MODE, TIME_MAJOR, optimistic_restore
@@ -68,7 +68,7 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
 
     # attention model for training
     _, total_loss_avg, entropy_loss_avg, reward_loss_rmse, reward_predicted = \
-        build_attention_model(params, src_vocab, trg_vocab, 
+        build_attention_model(params, src_vocab, trg_vocab,
                               source_placeholders,
                               target_placeholders,
                               mode=mode,
@@ -148,7 +148,7 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                           reward_predicted, global_step_tensor],
                          feed_dict=feed_dict)
             train_writer.add_summary(summary, global_step)
-            
+
             if numpy.isnan(gradients_norm_np):
                 print(gradients_norm_np, gradients_np)
                 break
@@ -172,6 +172,9 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
                 for i in range(10):
                     pids = predicted_ids_np[:, i].tolist()
                     if TIME_MAJOR:
+                        print(TIME_MAJOR)
+                        print("shape",predicted_ids_np.shape)
+                        print("pid is", pids)
                         sids = current_input_dict['src'][:, i].tolist()
                         tids = current_input_dict['trg'][:, i].tolist()
                     else:
@@ -189,7 +192,7 @@ def train(src_vocab, src_data_file, trg_vocab, trg_data_file,
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
 
-    all_configs = [i for i in dir(config) if i.startswith('config_')]
+    all_configs = [i for i in dir(config_example) if i.startswith('config_')]
 
     parser = argparse.ArgumentParser(description='Sequencing Training ...')
     parser.add_argument('--config', choices=all_configs,
@@ -200,8 +203,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    training_configs = getattr(config, args.config)()
-
+    training_configs = getattr(config_example, args.config)()
+    print("training_configs.params is", training_configs.params)
     if args.mode == 'rl':
         mode = MODE.RL
     else:
