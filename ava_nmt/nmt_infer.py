@@ -12,7 +12,7 @@ from shutil import copyfile
 import numpy
 import tensorflow as tf
 
-import config
+import config_example
 from build_inputs import build_source_char_inputs
 from build_model import build_attention_model
 from sequencing import TIME_MAJOR, MODE, optimistic_restore
@@ -95,7 +95,7 @@ def infer(src_vocab, src_data_file, trg_vocab,
                  decoder_output_eval.beam_ids,
                  decoder_final_state.log_probs],
                 feed_dict=feed_dict)
-            
+
             src_len_np = current_input_dict['src_len']
             data_batch_size = len(src_len_np)
 
@@ -139,7 +139,7 @@ def infer(src_vocab, src_data_file, trg_vocab,
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
 
-    all_configs = [i for i in dir(config) if i.startswith('config_')]
+    all_configs = [i for i in dir(config_example) if i.startswith('config_')]
 
     parser = argparse.ArgumentParser(description='Sequencing Training ...')
     parser.add_argument('--config', choices=all_configs,
@@ -153,7 +153,7 @@ if __name__ == '__main__':
                         default='test.out')
 
     args = parser.parse_args()
-    training_configs = getattr(config, args.config)()
+    training_configs = getattr(config_example, args.config)()
 
     test_src_file = args.test_src if args.test_src else training_configs.test_src_file
 

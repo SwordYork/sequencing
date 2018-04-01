@@ -15,6 +15,13 @@ import tensorflow as tf
 import sequencing as sq
 from sequencing import MODE, TIME_MAJOR
 
+def build_vocab(vocab_file, embedding_dim, delimiter=' '):
+    # construct vocab
+    with open(vocab_file, 'r') as f:
+        symbols = [s[:-1] for s in f.readlines()]
+    vocab = sq.Vocab(symbols, embedding_dim, delimiter)
+    return vocab
+
 def build_source_char_inputs(src_vocab, src_data_file,
                                batch_size, buffer_size=16,
                                mode=MODE.TRAIN):
@@ -75,7 +82,7 @@ def build_source_char_inputs(src_vocab, src_data_file,
                                                     for li, l in enumerate(lines)],
                                                     dtype=numpy.int32)
 
-                        src_sample_matrix_np = numpy.zeros((num_lines, max_word_length, 
+                        src_sample_matrix_np = numpy.zeros((num_lines, max_word_length,
                                                             src_len_np.max()),
                                                           dtype=numpy.float32)
 
@@ -166,7 +173,7 @@ def build_parallel_char_inputs(src_vocab, trg_vocab, src_data_file,
                             tf.logging.info('Read from head ......')
                             src_data.close()
                             trg_data.close()
-                            
+
                             # shuf and reopen
                             tf.logging.info('Shuffling ......')
                             subprocess.call(['./shuffle_data.sh', src_data_file, trg_data_file])
@@ -220,7 +227,7 @@ def build_parallel_char_inputs(src_vocab, trg_vocab, src_data_file,
                     trg_len_np = numpy.asarray([len(l[1]) for l in lines],
                                                dtype=numpy.int32)
 
-                    src_sample_matrix_np = numpy.zeros((num_lines, max_word_length, 
+                    src_sample_matrix_np = numpy.zeros((num_lines, max_word_length,
                                                         src_len_np.max()),
                                                       dtype=numpy.float32)
 
@@ -271,4 +278,3 @@ def build_parallel_char_inputs(src_vocab, trg_vocab, src_data_file,
             yield read_buffer.pop()
 
     return _parallel_generator()
-

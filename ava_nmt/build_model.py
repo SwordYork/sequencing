@@ -31,7 +31,7 @@ def cross_entropy_sequence_loss(logits, targets, sequence_length):
         losses = entropy_losses * loss_mask
         # losses.shape: T * B
         # sequence_length: B
-        total_loss_avg = tf.reduce_sum(losses) / batch_size 
+        total_loss_avg = tf.reduce_sum(losses) / batch_size
 
         return total_loss_avg
 
@@ -200,8 +200,8 @@ def build_attention_model(params, src_vocab, trg_vocab,
     source_char_embedded = source_char_embedding_table(source_ids)
 
     # encode char to word
-    char_encoder = sq.StackRNNEncoder(params['char_encoder'],
-                                      params['attention_key_size']['char'],
+    char_encoder = sq.StackRNNEncoder(params['encoder'],
+                                      params['encoder']['attention_key_size'],
                                       name='char_rnn',
                                       mode=mode)
 
@@ -227,14 +227,14 @@ def build_attention_model(params, src_vocab, trg_vocab,
     char_attention_length = char_encoded_representation.attention_length
 
     encoder = sq.StackBidirectionalRNNEncoder(params['encoder'],
-                                              params['attention_key_size']['word'],
+                                              params['encoder']['attention_key_size'],
                                               name='stack_rnn',
                                               mode=mode)
     encoded_representation = encoder.encode(source_embedded, source_word_seq_length)
     attention_keys = encoded_representation.attention_keys
     attention_values = encoded_representation.attention_values
     attention_length = encoded_representation.attention_length
-    encoder_final_states_bw = encoded_representation.final_state[-1][-1].h
+    encoder_final_states_bw = encoded_representation.final_state[-1][-1]
 
     # feedback
     if mode == MODE.RL:
@@ -412,5 +412,3 @@ def build_attention_model(params, src_vocab, trg_vocab,
             sequence_length=target_seq_length)
         return decoder_output, total_loss_avg, total_loss_avg, \
                tf.to_float(0.), tf.to_float(0.)
-
-
