@@ -28,17 +28,18 @@ class Vocab(object):
         self.unk_token, self.unk_id = unk_token, 0
         self.bos_token, self.bos_id = bos_token, 1
         self.eos_token, self.eos_id = eos_token, 2
-
-        self.token_to_id_dict = {token: token_id + 3 for token_id, token in
+        self.space_token, self.space_id = " ", 4
+        self.token_to_id_dict = {token: token_id + 4 for token_id, token in
                                  enumerate(tokens[:vocab_size])}
         self.token_to_id_dict.update(**{self.unk_token: self.unk_id,
                                         self.bos_token: self.bos_id,
-                                        self.eos_token: self.eos_id})
+                                        self.eos_token: self.eos_id,
+                                        self.space_token:self.space_id})
 
         self.id_to_token_dict = {v: k for k, v in self.token_to_id_dict.items()}
-        self.vocab_size = vocab_size + 3
-        if self.delimiter == '':
-            self.space_id = self.token_to_id_dict[' ']
+        self.vocab_size = vocab_size + 4
+        #if self.delimiter == '':
+        self.space_id = self.token_to_id_dict[' ']
 
     def _map_token_to_id_with_unk(self, token):
         try:
@@ -55,7 +56,7 @@ class Vocab(object):
         return list(map(self._map_token_to_id_with_unk, tokens))
 
     def string_to_ids(self, token_string, bos=False):
-        if self.delimiter:
+        if self.delimiter: # delimiter=" "
             tokens = token_string.strip().split(self.delimiter)
         else:
             # delimiter is '', character-level
@@ -84,4 +85,3 @@ def build_vocab(vocab_file, embedding_dim, delimiter=' ',
         symbols = [s.split('\t')[0] for s in f.readlines()]
     vocab = Vocab(symbols, embedding_dim, delimiter, vocab_size)
     return vocab
-
